@@ -1,0 +1,3 @@
+class UploadType:
+    DETECTION = 'DETECTION'
+    CAMERA_PREVIEW = 'CAMERA_PREVIEW'

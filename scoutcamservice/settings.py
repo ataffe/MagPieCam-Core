@@ -162,7 +162,8 @@ ALLOWED_HOSTS = ['localhost', '10.0.0.126']
 
 # AWS Environment Variables
 AWS_REGION = os.environ.get('AWS_REGION', '')
-AWS_IMG_UPLOAD_BUCKET = os.environ.get('AWS_IMG_UPLOAD_BUCKET', '')
+AWS_IMG_DETECTION_BUCKET = os.environ.get('AWS_IMG_DETECTION_BUCKET', '')
+AWS_IMG_PREVIEW_BUCKET = os.environ.get('AWS_IMG_PREVIEW_BUCKET', '')
 AWS_ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL", default=None)
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", default="test")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", default="test")

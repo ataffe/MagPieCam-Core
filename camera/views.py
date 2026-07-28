@@ -16,9 +16,10 @@ from django.utils import timezone
 from camera.models import Camera
 from camera.serializers import CameraSerializer, CameraRegistrationSerializer, ProvisionCameraSerializer, ClaimCameraSerializer
 from camera.authentication import CameraTokenAuthentication, CameraJWTAuthentication
-from camera.s3_client import get_detection_upload_url
+from camera.s3_client import get_upload_url
+from camera.constants import UploadType
 
-ALLOWED_TYPES = {"image/jpeg", "image/png"}
+ALLOWED_TYPES = {"image/jpeg"}
 logger = logging.getLogger('Camera API')
 
 class CameraTokenExchangeView(APIView):
@@ -155,19 +156,16 @@ class PresignedImageUploadUrlView(APIView):
         if content_type not in ALLOWED_TYPES:
             return Response({'detail': 'Unsupported content type'}, status=status.HTTP_400_BAD_REQUEST)
 
-        image_format = 'jpeg' if content_type == 'image/jpeg' else 'png'
         upload_type = self.request.query_params.get('upload_type', None)
-        if upload_type == 'DETECTION':
-            img_key = f'detection/{public_camera_id}/{uuid.uuid4()}.{image_format}'
-        elif upload_type == 'CAMERA_PREVIEW':
-            # Preview images are always stored/served as .jpg (see
-            # get_camera_preview_download_url), regardless of the uploaded
-            # content type, since this key is a fixed, overwritten singleton.
+        if upload_type == UploadType.DETECTION:
+            img_key = f'detection/{public_camera_id}/{uuid.uuid4()}.jpg'
+            url = get_upload_url(img_key=img_key, content_type=content_type, upload_type=UploadType.DETECTION)
+        elif upload_type == UploadType.CAMERA_PREVIEW:
             img_key = f'preview/{public_camera_id}/latest.jpg'
+            url = get_upload_url(img_key=img_key, content_type=content_type, upload_type=UploadType.CAMERA_PREVIEW)
         else:
             return Response({'detail': 'Missing or Unsupported upload type'}, status=status.HTTP_400_BAD_REQUEST)
 
-        url = get_detection_upload_url(img_key=img_key, content_type=content_type)
         return Response({'url': url, 'key': img_key, 'expires_in': 300})
 
 

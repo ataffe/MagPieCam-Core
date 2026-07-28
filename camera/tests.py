@@ -1,13 +1,14 @@
 import hashlib
 from unittest.mock import patch, MagicMock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from users.models import User
 from camera.models import Camera
 from camera.s3_client import get_s3_client
+from camera.constants import UploadType
 from django.urls import reverse
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 
@@ -405,7 +406,7 @@ class PresignedUploadTests(TestCase):
         self.camera = Camera.objects.create(owner=self.user, location='Front door')
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {camera_access_token(self.camera)}')
 
-    def presign(self, content_type='image/jpeg', upload_type='DETECTION'):
+    def presign(self, content_type='image/jpeg', upload_type=UploadType.DETECTION):
         url = reverse('camera:presigned_upload')
         if upload_type is not None:
             url = f'{url}?upload_type={upload_type}'
@@ -417,13 +418,13 @@ class PresignedUploadTests(TestCase):
         mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
         mock_boto_client.return_value = mock_s3
 
-        response = self.presign(upload_type='DETECTION')
+        response = self.presign(upload_type=UploadType.DETECTION)
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data['url'], 'https://example.com/presigned')
         self.assertTrue(data['key'].startswith(f'detection/{self.camera.public_camera_id}/'))
-        self.assertTrue(data['key'].endswith('.jpeg'))
+        self.assertTrue(data['key'].endswith('.jpg'))
         self.assertEqual(data['expires_in'], 300)
 
         _, kwargs = mock_s3.generate_presigned_url.call_args
@@ -436,7 +437,7 @@ class PresignedUploadTests(TestCase):
         mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
         mock_boto_client.return_value = mock_s3
 
-        response = self.presign(upload_type='DETECTION')
+        response = self.presign(upload_type=UploadType.DETECTION)
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['key'].startswith(f'detection/{self.camera.public_camera_id}/'))
@@ -447,7 +448,7 @@ class PresignedUploadTests(TestCase):
         mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
         mock_boto_client.return_value = mock_s3
 
-        response = self.presign(upload_type='CAMERA_PREVIEW')
+        response = self.presign(upload_type=UploadType.CAMERA_PREVIEW)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -455,21 +456,35 @@ class PresignedUploadTests(TestCase):
             f'preview/{self.camera.public_camera_id}/latest.jpg',
         )
 
+    @override_settings(AWS_IMG_DETECTION_BUCKET='detection-bucket', AWS_IMG_PREVIEW_BUCKET='preview-bucket')
     @patch('camera.s3_client.boto3.client')
-    def test_presigned_upload_camera_preview_key_is_always_jpg_regardless_of_content_type(self, mock_boto_client):
-        """The download side always requests latest.jpg, so the upload key must match
-        even when the device uploads a PNG preview."""
+    def test_presigned_upload_detection_uses_detection_bucket(self, mock_boto_client):
+        """Regression test: DETECTION and CAMERA_PREVIEW uploads must go to their
+        own buckets. A prior bug sent every upload to the detection bucket."""
         mock_s3 = MagicMock()
         mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
         mock_boto_client.return_value = mock_s3
 
-        response = self.presign(content_type='image/png', upload_type='CAMERA_PREVIEW')
+        response = self.presign(upload_type=UploadType.DETECTION)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.json()['key'],
-            f'preview/{self.camera.public_camera_id}/latest.jpg',
-        )
+        _, kwargs = mock_s3.generate_presigned_url.call_args
+        self.assertEqual(kwargs['Params']['Bucket'], 'detection-bucket')
+
+    @override_settings(AWS_IMG_DETECTION_BUCKET='detection-bucket', AWS_IMG_PREVIEW_BUCKET='preview-bucket')
+    @patch('camera.s3_client.boto3.client')
+    def test_presigned_upload_camera_preview_uses_preview_bucket(self, mock_boto_client):
+        """Regression test: DETECTION and CAMERA_PREVIEW uploads must go to their
+        own buckets. A prior bug sent every upload to the detection bucket."""
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        response = self.presign(upload_type=UploadType.CAMERA_PREVIEW)
+
+        self.assertEqual(response.status_code, 200)
+        _, kwargs = mock_s3.generate_presigned_url.call_args
+        self.assertEqual(kwargs['Params']['Bucket'], 'preview-bucket')
 
     def test_presigned_upload_missing_upload_type_returns_400(self):
         response = self.presign(upload_type=None)
@@ -480,7 +495,7 @@ class PresignedUploadTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_presigned_upload_rejects_unsupported_content_type(self):
-        response = self.presign(content_type='text/plain', upload_type='DETECTION')
+        response = self.presign(content_type='image/png', upload_type=UploadType.DETECTION)
         self.assertEqual(response.status_code, 400)
 
     def test_presigned_upload_requires_authentication_returns_401(self):
