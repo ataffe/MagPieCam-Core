@@ -2,10 +2,12 @@ import hashlib
 from unittest.mock import patch, MagicMock
 
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from users.models import User
 from camera.models import Camera
+from camera.s3_client import get_s3_client
 from django.urls import reverse
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 
@@ -70,6 +72,36 @@ class CameraTests(TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['location'], 'Front door')
+
+    def test_get_camera_preview_url_is_null_when_no_preview_uploaded(self):
+        response = self.client.get(
+            reverse('camera:camera-detail', kwargs={'public_camera_id': self.camera.public_camera_id})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()['camera_preview_url'])
+
+    @patch('camera.serializers.get_camera_preview_download_url')
+    def test_get_camera_preview_url_is_populated_after_preview_uploaded(self, mock_get_url):
+        mock_get_url.return_value = 'https://example.com/preview.jpg'
+        self.camera.preview_updated_at = timezone.now()
+        self.camera.save()
+
+        response = self.client.get(
+            reverse('camera:camera-detail', kwargs={'public_camera_id': self.camera.public_camera_id})
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['camera_preview_url'], 'https://example.com/preview.jpg')
+        mock_get_url.assert_called_once_with(f'preview/{self.camera.public_camera_id}/latest.jpg')
+
+    def test_patch_camera_cannot_set_preview_updated_at(self):
+        response = self.client.patch(
+            reverse('camera:camera-detail', kwargs={'public_camera_id': self.camera.public_camera_id}),
+            data={'preview_updated_at': '2020-01-01T00:00:00Z'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.camera.refresh_from_db()
+        self.assertIsNone(self.camera.preview_updated_at)
 
     def test_get_other_users_camera_returns_404(self):
         other_camera = Camera.objects.create(owner=self.other_user, location='Garage')
@@ -357,11 +389,14 @@ class CameraProvisioningFlowTests(TestCase):
 
 
 class PresignedUploadTests(TestCase):
-    """PresignedUploadUrlView is called by the camera itself, authenticated with a
+    """PresignedImageUploadUrlView is called by the camera itself, authenticated with a
     camera-scoped JWT (see CameraTokenExchangeTests), not a human user's JWT. The
     target camera is derived from the token, not from a URL/body parameter."""
 
     def setUp(self):
+        # get_s3_client() is process-cached via lru_cache, so a client (real or
+        # mocked) created by an earlier test would otherwise leak into this one.
+        get_s3_client.cache_clear()
         self.client = APIClient()
         self.user = User.objects.create_user(
             username='alice', email='alice@example.com', password='StrongPass123!',
@@ -370,45 +405,82 @@ class PresignedUploadTests(TestCase):
         self.camera = Camera.objects.create(owner=self.user, location='Front door')
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {camera_access_token(self.camera)}')
 
-    def presign(self, content_type='image/jpeg'):
-        return self.client.post(
-            reverse('camera:presigned_upload'),
-            data={'content_type': content_type},
-            format='json',
-        )
+    def presign(self, content_type='image/jpeg', upload_type='DETECTION'):
+        url = reverse('camera:presigned_upload')
+        if upload_type is not None:
+            url = f'{url}?upload_type={upload_type}'
+        return self.client.post(url, data={'content_type': content_type}, format='json')
 
-    @patch('camera.views.boto3.client')
-    def test_presigned_upload_returns_url_for_authenticated_camera(self, mock_boto_client):
+    @patch('camera.s3_client.boto3.client')
+    def test_presigned_upload_detection_returns_url_for_authenticated_camera(self, mock_boto_client):
         mock_s3 = MagicMock()
         mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
         mock_boto_client.return_value = mock_s3
 
-        response = self.presign()
+        response = self.presign(upload_type='DETECTION')
 
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data['url'], 'https://example.com/presigned')
-        self.assertTrue(data['key'].startswith(f'device/{self.camera.public_camera_id}/'))
+        self.assertTrue(data['key'].startswith(f'detection/{self.camera.public_camera_id}/'))
         self.assertTrue(data['key'].endswith('.jpeg'))
         self.assertEqual(data['expires_in'], 300)
 
         _, kwargs = mock_s3.generate_presigned_url.call_args
         self.assertEqual(kwargs['Params']['ContentType'], 'image/jpeg')
 
-    @patch('camera.views.boto3.client')
-    def test_presigned_upload_uses_authenticated_camera_even_if_another_camera_exists(self, mock_boto_client):
+    @patch('camera.s3_client.boto3.client')
+    def test_presigned_upload_detection_uses_authenticated_camera_even_if_another_camera_exists(self, mock_boto_client):
         Camera.objects.create(owner=self.user, location='Garage')
         mock_s3 = MagicMock()
         mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
         mock_boto_client.return_value = mock_s3
 
-        response = self.presign()
+        response = self.presign(upload_type='DETECTION')
 
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(response.json()['key'].startswith(f'device/{self.camera.public_camera_id}/'))
+        self.assertTrue(response.json()['key'].startswith(f'detection/{self.camera.public_camera_id}/'))
+
+    @patch('camera.s3_client.boto3.client')
+    def test_presigned_upload_camera_preview_returns_fixed_latest_key(self, mock_boto_client):
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        response = self.presign(upload_type='CAMERA_PREVIEW')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()['key'],
+            f'preview/{self.camera.public_camera_id}/latest.jpg',
+        )
+
+    @patch('camera.s3_client.boto3.client')
+    def test_presigned_upload_camera_preview_key_is_always_jpg_regardless_of_content_type(self, mock_boto_client):
+        """The download side always requests latest.jpg, so the upload key must match
+        even when the device uploads a PNG preview."""
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        response = self.presign(content_type='image/png', upload_type='CAMERA_PREVIEW')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()['key'],
+            f'preview/{self.camera.public_camera_id}/latest.jpg',
+        )
+
+    def test_presigned_upload_missing_upload_type_returns_400(self):
+        response = self.presign(upload_type=None)
+        self.assertEqual(response.status_code, 400)
+
+    def test_presigned_upload_invalid_upload_type_returns_400(self):
+        response = self.presign(upload_type='NOT_A_REAL_TYPE')
+        self.assertEqual(response.status_code, 400)
 
     def test_presigned_upload_rejects_unsupported_content_type(self):
-        response = self.presign(content_type='text/plain')
+        response = self.presign(content_type='text/plain', upload_type='DETECTION')
         self.assertEqual(response.status_code, 400)
 
     def test_presigned_upload_requires_authentication_returns_401(self):
@@ -431,6 +503,47 @@ class PresignedUploadTests(TestCase):
     def test_presigned_upload_rejects_jwt_of_deleted_camera(self):
         self.camera.delete()
         response = self.presign()
+        self.assertEqual(response.status_code, 401)
+
+
+class CameraPreviewTimeTests(TestCase):
+    """Covers CameraPreviewTimeView, which lets an authenticated camera record that
+    it just refreshed its preview image."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='alice', email='alice@example.com', password='StrongPass123!',
+            first_name='Alice', last_name='Smith',
+        )
+        self.camera = Camera.objects.create(owner=self.user, location='Front door')
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {camera_access_token(self.camera)}')
+
+    def update_preview_time(self):
+        return self.client.post(reverse('camera:update_preview_time'))
+
+    def test_update_preview_time_returns_200_and_sets_timestamp(self):
+        self.assertIsNone(self.camera.preview_updated_at)
+        response = self.update_preview_time()
+        self.assertEqual(response.status_code, 200)
+        self.camera.refresh_from_db()
+        self.assertIsNotNone(self.camera.preview_updated_at)
+
+    def test_update_preview_time_requires_authentication_returns_401(self):
+        self.client.credentials()
+        response = self.update_preview_time()
+        self.assertEqual(response.status_code, 401)
+
+    def test_update_preview_time_rejects_a_human_users_jwt(self):
+        refresh = RefreshToken.for_user(self.user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
+        response = self.update_preview_time()
+        self.assertEqual(response.status_code, 401)
+
+    def test_update_preview_time_rejects_jwt_of_revoked_camera(self):
+        self.camera.revoked = True
+        self.camera.save()
+        response = self.update_preview_time()
         self.assertEqual(response.status_code, 401)
 
 

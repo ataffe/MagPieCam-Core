@@ -20,6 +20,7 @@ class Camera(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     claimed_at = models.DateTimeField(blank=True, null=True)
+    preview_updated_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         constraints = [
