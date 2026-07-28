@@ -4,9 +4,6 @@ import logging
 import secrets
 import uuid
 
-import boto3
-from botocore.config import Config
-from django.conf import settings
 from rest_framework import status
 from rest_framework import viewsets, permissions
 from rest_framework.parsers import JSONParser
@@ -19,8 +16,10 @@ from django.utils import timezone
 from camera.models import Camera
 from camera.serializers import CameraSerializer, CameraRegistrationSerializer, ProvisionCameraSerializer, ClaimCameraSerializer
 from camera.authentication import CameraTokenAuthentication, CameraJWTAuthentication
+from camera.s3_client import get_upload_url
+from camera.constants import UploadType
 
-ALLOWED_TYPES = {"image/jpeg", "image/png"}
+ALLOWED_TYPES = {"image/jpeg"}
 logger = logging.getLogger('Camera API')
 
 class CameraTokenExchangeView(APIView):
@@ -143,7 +142,7 @@ class CameraClaimView(APIView):
         return Response({'public_camera_id': camera.public_camera_id}, status=status.HTTP_200_OK)
 
 
-class PresignedUploadUrlView(APIView):
+class PresignedImageUploadUrlView(APIView):
     authentication_classes = [CameraJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
@@ -157,23 +156,25 @@ class PresignedUploadUrlView(APIView):
         if content_type not in ALLOWED_TYPES:
             return Response({'detail': 'Unsupported content type'}, status=status.HTTP_400_BAD_REQUEST)
 
-        image_format = 'jpeg' if content_type == 'image/jpeg' else 'png'
-        img_key = f'device/{public_camera_id}/{uuid.uuid4()}.{image_format}'
-        s3 = boto3.client(
-            's3',
-            region_name=settings.AWS_REGION,
-            endpoint_url=settings.AWS_ENDPOINT_URL,
-            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            config=Config(signature_version='s3v4'))
-
-        url = s3.generate_presigned_url(
-            ClientMethod='put_object',
-            Params={'Bucket': settings.AWS_IMG_UPLOAD_BUCKET, 'Key': img_key, 'ContentType': content_type},
-            ExpiresIn=300
-        )
-
-        if settings.ENVIRONMENT == 'dev':
-            url = url.replace('localhost', settings.DEV_IP)
+        upload_type = self.request.query_params.get('upload_type', None)
+        if upload_type == UploadType.DETECTION:
+            img_key = f'detection/{public_camera_id}/{uuid.uuid4()}.jpg'
+            url = get_upload_url(img_key=img_key, content_type=content_type, upload_type=UploadType.DETECTION)
+        elif upload_type == UploadType.CAMERA_PREVIEW:
+            img_key = f'preview/{public_camera_id}/latest.jpg'
+            url = get_upload_url(img_key=img_key, content_type=content_type, upload_type=UploadType.CAMERA_PREVIEW)
+        else:
+            return Response({'detail': 'Missing or Unsupported upload type'}, status=status.HTTP_400_BAD_REQUEST)
 
         return Response({'url': url, 'key': img_key, 'expires_in': 300})
+
+
+class CameraPreviewTimeView(APIView):
+    authentication_classes = [CameraJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        camera = request.user
+        camera.preview_updated_at = timezone.now()
+        camera.save()
+        return Response(status=status.HTTP_200_OK)
