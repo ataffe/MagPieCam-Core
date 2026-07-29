@@ -616,3 +616,62 @@ class CameraTokenExchangeTests(TestCase):
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
         response = self.client.get(reverse('camera:camera-list'))
         self.assertEqual(response.status_code, 401)
+
+
+class MediaMtxAuthTests(TestCase):
+    """Covers MediaMtxAuthView, the HTTP webhook MediaMTX calls to authorize a
+    publish/read using either a camera-scoped JWT or a human user's JWT."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='alice', email='alice@example.com', password='StrongPass123!',
+            first_name='Alice', last_name='Smith',
+        )
+        self.camera = Camera.objects.create(owner=self.user, location='Front door')
+
+    def authorize(self, token, user='', protocol='rtsp'):
+        return self.client.post(
+            reverse('camera:mediamtx_auth'),
+            data={'user': user, 'token': token, 'protocol': protocol},
+            format='json',
+        )
+
+    def test_valid_camera_jwt_returns_200(self):
+        response = self.authorize(camera_access_token(self.camera))
+        self.assertEqual(response.status_code, 200)
+
+    def test_valid_user_jwt_returns_200(self):
+        access = str(RefreshToken.for_user(self.user).access_token)
+        response = self.authorize(access)
+        self.assertEqual(response.status_code, 200)
+
+    def test_camera_jwt_for_deleted_camera_returns_404(self):
+        token = camera_access_token(self.camera)
+        self.camera.delete()
+        response = self.authorize(token)
+        self.assertEqual(response.status_code, 404)
+
+    def test_camera_jwt_for_revoked_camera_returns_401(self):
+        self.camera.revoked = True
+        self.camera.save()
+        response = self.authorize(camera_access_token(self.camera))
+        self.assertEqual(response.status_code, 401)
+
+    def test_user_jwt_for_deleted_user_returns_401(self):
+        access = str(RefreshToken.for_user(self.user).access_token)
+        self.user.delete()
+        response = self.authorize(access)
+        self.assertEqual(response.status_code, 401)
+
+    def test_garbage_token_returns_401(self):
+        response = self.authorize('not-a-real-token')
+        self.assertEqual(response.status_code, 401)
+
+    def test_missing_token_field_returns_400(self):
+        response = self.client.post(
+            reverse('camera:mediamtx_auth'),
+            data={'user': '', 'protocol': 'rtsp'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)

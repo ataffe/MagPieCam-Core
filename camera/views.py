@@ -3,24 +3,38 @@ import hmac
 import logging
 import secrets
 import uuid
+import redis
 
 from rest_framework import status
 from rest_framework import viewsets, permissions
 from rest_framework.parsers import JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.utils import timezone
+from django.conf import settings
 
 from camera.models import Camera
-from camera.serializers import CameraSerializer, CameraRegistrationSerializer, ProvisionCameraSerializer, ClaimCameraSerializer
+from camera.serializers import (
+    CameraSerializer,
+    CameraRegistrationSerializer,
+    ProvisionCameraSerializer,
+    ClaimCameraSerializer,
+    MediaMtxAuthSerializer)
 from camera.authentication import CameraTokenAuthentication, CameraJWTAuthentication
 from camera.s3_client import get_upload_url
 from camera.constants import UploadType
 
 ALLOWED_TYPES = {"image/jpeg"}
 logger = logging.getLogger('Camera API')
+
+redis_client = redis.from_url(
+    settings.REDIS_URL,
+    decode_responses=True,
+    max_connections=200,  # >= expected concurrent cameras, with headroom
+)
 
 class CameraTokenExchangeView(APIView):
     authentication_classes = [CameraTokenAuthentication]
@@ -33,6 +47,34 @@ class CameraTokenExchangeView(APIView):
         token['scope'] = 'camera'
 
         return Response({'access': str(token)}, status=status.HTTP_200_OK)
+
+
+class MediaMtxAuthView(APIView):
+    permission_classes = [permissions.AllowAny]
+    parser_classes = [JSONParser]
+
+    def post(self, request):
+        serializer = MediaMtxAuthSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token = serializer.validated_data['token']
+        logger.info(f'Received media mtx auth request for token: {token}')
+
+        jwt_auth = JWTAuthentication()
+        validated_token = jwt_auth.get_validated_token(token)
+        public_camera_id = validated_token.get('public_camera_id')
+
+        # The JWT must either contain a user or a public_camera_id
+        if not public_camera_id:
+            jwt_auth.get_user(validated_token)
+        else:
+            try:
+                camera = Camera.objects.get(public_camera_id=public_camera_id)
+            except Camera.DoesNotExist:
+                return Response({'detail': 'Camera does not exist'}, status=status.HTTP_404_NOT_FOUND)
+            if camera.revoked:
+                return Response({'detail': 'Camera has been revoked'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        return Response(status=status.HTTP_200_OK)
 
 class CameraViewSet(viewsets.ModelViewSet):
     serializer_class = CameraSerializer
@@ -178,3 +220,4 @@ class CameraPreviewTimeView(APIView):
         camera.preview_updated_at = timezone.now()
         camera.save()
         return Response(status=status.HTTP_200_OK)
+
