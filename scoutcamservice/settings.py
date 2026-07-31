@@ -158,7 +158,9 @@ AUTH_USER_MODEL = 'users.User'
 # 'DJANGO_ALLOWED_HOSTS' should be a single string of hosts with a, between each.
 # For example: 'DJANGO_ALLOWED_HOSTS=localhost 127.0.0.1,[::1]'
 # ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1').split(',')
-ALLOWED_HOSTS = ['localhost', '10.0.0.126']
+
+# TODO: DON'T LET THIS INTO PRODUCTION!!!!!
+ALLOWED_HOSTS = ['*']
 
 # AWS Environment Variables
 AWS_REGION = os.environ.get('AWS_REGION', '')
@@ -167,6 +169,13 @@ AWS_IMG_PREVIEW_BUCKET = os.environ.get('AWS_IMG_PREVIEW_BUCKET', '')
 AWS_ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL", default=None)
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", default="test")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", default="test")
+
+# Polling
+STREAMING_LONG_POLL_TIMEOUT = os.environ.get("STREAMING_LONG_POLL_TIMEOUT", default=25)
+STREAMING_REDIS_TTL = os.environ.get("STREAMING_REDIS_TTL", default=60)
+
+# Redis
+REDIS_URL = os.environ.get('REDIS_URL', default="redis://localhost:6379")
 
 # Environment Tracking Variables
 ENVIRONMENT = os.environ.get('ENV', default="dev")

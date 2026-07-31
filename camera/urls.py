@@ -9,6 +9,7 @@ from camera.views import (
     CameraRegistrationView,
     CameraClaimView,
     CameraTokenExchangeView,
+    MediaMtxAuthView
 )
 
 app_name = 'camera'
@@ -26,5 +27,6 @@ urlpatterns = [
     path('cameras/register/', CameraRegistrationView.as_view(), name='register_camera'),
     path('cameras/claim/', CameraClaimView.as_view(), name='claim_camera'),
     path('cameras/auth/token/', CameraTokenExchangeView.as_view(), name='token_exchange'),
+    path('cameras/mediamtx/auth/', MediaMtxAuthView.as_view(), name='mediamtx_auth'),
     *camera_router.urls,
 ]

@@ -6,3 +6,4 @@ django-extensions==4.1
 psycopg[binary]==3.3.3
 gunicorn==25.3.0
 boto3==1.43.14
+redis
