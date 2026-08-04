@@ -23,10 +23,17 @@ services:
   scoutcam-redis:
     image: redis
     container_name: scoutcam-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - scoutcam-network
 
   scoutcam-web-service:
     build: .
-    image: scoutcamwebservice-dev
+    image: scoutcam-web-service:0.1.0
     container_name: scoutcam-web-service
     env_file:
       - .env-docker
@@ -41,6 +48,42 @@ services:
     # the (disabled) mount in the old start_service_container-dev.sh script.
     # volumes:
     #   - ~/.aws:/home/appuser/.aws:ro
+    networks:
+      - scoutcam-network
+
+  scoutcam-celery-worker:
+    build:
+      context: .
+      args:
+        REQUIREMENTS: requirements/worker.txt
+    image: scoutcamworker-dev
+    container_name: scoutcam-celery-worker
+    command: celery -A scoutcamservice worker -l info
+    env_file:
+      - .env-docker
+    depends_on:
+      scoutcam-postgres:
+        condition: service_healthy
+      scoutcam-redis:
+        condition: service_healthy
+    networks:
+      - scoutcam-network
+
+  scoutcam-event-consumer:
+    build:
+      context: .
+      args:
+        REQUIREMENTS: requirements/worker.txt
+    image: scoutcamworker-dev
+    container_name: scoutcam-event-consumer
+    command: python manage.py consume_events
+    env_file:
+      - .env-docker
+    depends_on:
+      scoutcam-postgres:
+        condition: service_healthy
+      scoutcam-redis:
+        condition: service_healthy
     networks:
       - scoutcam-network
 

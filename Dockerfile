@@ -16,11 +16,15 @@ ENV PYTHONUNBUFFERED=1
 # Upgrade pip
 RUN pip install --upgrade pip
 
-# Copy requirements file first (better caching)
-COPY requirements.txt /app/
+# Which dependency set to install. The web service takes the default; the Celery
+# worker overrides it with requirements/worker.txt to add the event-processing
+# deps. Same base layers for both.
+ARG REQUIREMENTS=requirements/base.txt
+
+COPY requirements/ /app/requirements/
 
 # Install python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r ${REQUIREMENTS}
 
 # Stage 2: Production stage
 FROM python:3.12-slim

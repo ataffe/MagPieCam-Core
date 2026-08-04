@@ -1,3 +1,5 @@
+# Everything needed to boot the Django project: the web service installs only
+# this. Deliberately excludes the event-processing deps (Pillow, google-genai)
 Django==6.0.4
 djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
@@ -6,4 +8,5 @@ django-extensions==4.1
 psycopg[binary]==3.3.3
 gunicorn==25.3.0
 boto3==1.43.14
-redis
+redis==8.1.0
+celery==5.6.3
