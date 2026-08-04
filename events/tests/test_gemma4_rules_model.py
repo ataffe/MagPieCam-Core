@@ -124,6 +124,7 @@ def test_init_loads_model_with_bfloat16_and_auto_device_map(tmp_path):
         str(tmp_path),
         dtype=mock_torch.bfloat16,
         device_map='auto',
+        local_files_only=True,
     )
 
 
@@ -135,7 +136,8 @@ def test_init_loads_processor_from_weights_dir(tmp_path):
          patch(f'{MODULE}.AutoProcessor') as mock_proc, \
          patch(f'{MODULE}.download_weights_backblaze'):
         model.init()
-    mock_proc.from_pretrained.assert_called_once_with(str(tmp_path))
+    mock_proc.from_pretrained.assert_called_once_with(
+        str(tmp_path), local_files_only=True)
 
 
 def test_init_assigns_loaded_model_and_processor_to_instance(tmp_path):

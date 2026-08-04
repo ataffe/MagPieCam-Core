@@ -65,3 +65,7 @@ jobs:
     - name: Run Tests
       run: |
         pytest
+    - name: Security check (bandit)
+      run: |
+        bandit -r camera users rules scoutcamservice events notifications tools \
+          -x '*/migrations/*,*/tests/*,*/tests.py,*/test_*.py' -ll

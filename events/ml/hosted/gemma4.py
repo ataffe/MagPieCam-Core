@@ -49,12 +49,16 @@ class Gemma4RulesModel(RulesModel):
                 or not any(Path(model_path).iterdir())):
             download_weights_backblaze('gemma4', self.variant, self.weights_dir)
             logger.info(f"Model downloaded to {model_path}")
-        self.model = AutoModelForCausalLM.from_pretrained(
+        # model_path is a local directory populated by download_weights_backblaze
+        # above, never a Hub repo id, so there's no revision to pin.
+        self.model = AutoModelForCausalLM.from_pretrained(  # nosec B615
             model_path,
             dtype=torch.bfloat16,
-            device_map="auto"
+            device_map="auto",
+            local_files_only=True,
         )
-        self.processor = AutoProcessor.from_pretrained(model_path)
+        self.processor = AutoProcessor.from_pretrained(  # nosec B615
+            model_path, local_files_only=True)
 
         warm_up_message = [
             {"role": "system", "content": "You are a helpful assistant."}

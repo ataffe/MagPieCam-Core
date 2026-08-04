@@ -4,3 +4,4 @@
 pytest==9.0.3
 pytest-django==4.12.0
 boto3-stubs[s3,sqs]==1.43.14
+bandit==1.9.4

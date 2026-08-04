@@ -5,7 +5,7 @@ PROVISION_ENDPOINT = 'http://localhost:8000/v1/cameras/provision/'
 def provision_camera(device_id: str):
     payload = {'device_id': device_id}
     headers = {'Content-Type': 'application/json'}
-    response = requests.post(PROVISION_ENDPOINT, json=payload, headers=headers)
+    response = requests.post(PROVISION_ENDPOINT, json=payload, headers=headers, timeout=10)
     if response.status_code == 201:
         print('Camera Provisioned Successfully')
         print(response.json())
