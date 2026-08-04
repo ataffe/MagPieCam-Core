@@ -2,6 +2,8 @@ services:
   scoutcam-postgres:
     image: postgres
     container_name: scoutcam-postgres
+    env_file:
+      - .env-docker
     environment:
       POSTGRES_DB: ${DATABASE_NAME}
       POSTGRES_USER: ${DATABASE_USERNAME}
@@ -21,10 +23,19 @@ services:
   scoutcam-redis:
     image: redis
     container_name: scoutcam-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - scoutcam-network
 
   scoutcam-web-service:
     build: .
-    image: scoutcamwebservice-dev
+    image: scoutcam-webservice:0.1.0
     container_name: scoutcam-web-service
     env_file:
       - .env-docker
@@ -33,12 +44,95 @@ services:
     depends_on:
       scoutcam-postgres:
         condition: service_healthy
+      scout-moto:
+        condition: service_healthy
     ports:
       - "8000:8000"
-    # Uncomment to give the container access to your AWS credentials, matching
-    # the (disabled) mount in the old start_service_container-dev.sh script.
-    # volumes:
-    #   - ~/.aws:/home/appuser/.aws:ro
+    networks:
+      - scoutcam-network
+
+  # The worker runs both camera.tasks (stream sweeping) and events.tasks (image
+  # evaluation), so it needs requirements/worker.txt
+  scoutcam-celery-worker:
+    build:
+      context: .
+      args:
+        REQUIREMENTS: requirements/worker.txt
+    image: scoutcam-webservice-worker:0.1.0
+    container_name: scoutcam-celery-worker
+    command: celery -A scoutcamservice worker -l info
+    env_file:
+      - .env-docker
+    tty: true
+    stdin_open: true
+    depends_on:
+      scoutcam-postgres:
+        condition: service_healthy
+      scoutcam-redis:
+        condition: service_healthy
+      scout-moto:
+        condition: service_healthy
+    networks:
+      - scoutcam-network
+
+  # Beat only schedules; it shares the worker image so there's one build to keep
+  # in sync rather than three.
+  scoutcam-celery-beat:
+    build:
+      context: .
+      args:
+        REQUIREMENTS: requirements/worker.txt
+    image: scoutcam-webservice-worker:0.1.0
+    container_name: scoutcam-celery-beat
+    command: celery -A scoutcamservice beat -l info
+    env_file:
+      - .env-docker
+    tty: true
+    stdin_open: true
+    depends_on:
+      scoutcam-redis:
+        condition: service_healthy
+    networks:
+      - scoutcam-network
+
+  scoutcam-event-consumer:
+    build:
+      context: .
+      args:
+        REQUIREMENTS: requirements/worker.txt
+    image: scoutcam-webservice-worker:0.1.0
+    container_name: scoutcam-event-consumer
+    command: python manage.py consume_events
+    env_file:
+      - .env-docker
+    depends_on:
+      scoutcam-postgres:
+        condition: service_healthy
+      scoutcam-redis:
+        condition: service_healthy
+      scout-moto:
+        condition: service_healthy
+    networks:
+      - scoutcam-network
+
+  # Mocks S3 and SQS for local dev so nothing touches real AWS. Seeds the
+  # buckets/queue from .env-docker on every start since moto keeps no state.
+  scout-moto:
+    build:
+      context: ./docker/moto
+    image: scoutcam-moto:0.1.0
+    container_name: scout-moto
+    env_file:
+      - .env-docker
+    # Host-side 5000 is commonly taken by macOS's AirPlay Receiver; the
+    # container-internal port (used by the other services) is unaffected.
+    ports:
+      - "5001:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/moto-api/')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     networks:
       - scoutcam-network
 
@@ -54,6 +148,7 @@ services:
       - "8554:8554"
       - "8888:8888"
       - "8889:8889"
+      - "9997:9997"
       - "8189:8189/udp"
     networks:
       - scoutcam-network

@@ -1,0 +1,48 @@
+# Virtualenvs — never belong in the image
+*-venv
+.venv
+venv/
+env/
+
+# VCS and editor state
+.git
+.github
+.gitignore
+.idea
+.vscode
+.claude
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Tests and dev-only tooling — not needed at runtime
+tools/
+pytest.ini
+requirements/dev.txt
+requirements/hosted.txt
+
+# Model weights are downloaded at runtime from object storage
+ml_weights
+
+# Secrets — injected at runtime via env_file, so baking them into a layer
+# only risks leaking them.
+.env
+.env.bak
+.env-docker
+.env.example
+
+# Build/run scripts aren't needed inside the image
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Scratch/local files
+scratch
+.DS_Store
+*.log
+README.md
+LICENSE

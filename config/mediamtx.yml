@@ -113,7 +113,7 @@ authJWTAudience:
 # Global settings -> Control API
 
 # Enable the control API server, which allows to control the server.
-api: false
+api: true
 # Address of the TCP/HTTP listener.
 apiAddress: :9997
 # Enable HTTPS.

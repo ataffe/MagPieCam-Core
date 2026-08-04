@@ -34,6 +34,8 @@ INSTALLED_APPS = [
     'rules',
     'users',
     'camera',
+    'notifications',
+    'events',
     'django_extensions',
     'rest_framework',
     'rest_framework_simplejwt',
@@ -162,7 +164,7 @@ AUTH_USER_MODEL = 'users.User'
 # TODO: DON'T LET THIS INTO PRODUCTION!!!!!
 ALLOWED_HOSTS = ['*']
 
-# AWS Environment Variables
+# AWS
 AWS_REGION = os.environ.get('AWS_REGION', '')
 AWS_IMG_DETECTION_BUCKET = os.environ.get('AWS_IMG_DETECTION_BUCKET', '')
 AWS_IMG_PREVIEW_BUCKET = os.environ.get('AWS_IMG_PREVIEW_BUCKET', '')
@@ -170,13 +172,47 @@ AWS_ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL", default=None)
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", default="test")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", default="test")
 
-# Polling
-STREAMING_LONG_POLL_TIMEOUT = os.environ.get("STREAMING_LONG_POLL_TIMEOUT", default=25)
-STREAMING_REDIS_TTL = os.environ.get("STREAMING_REDIS_TTL", default=60)
-
 # Redis
-REDIS_URL = os.environ.get('REDIS_URL', default="redis://localhost:6379")
+REDIS_HOST = os.environ.get('REDIS_HOST', default="localhost")
+REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
 
-# Environment Tracking Variables
+# Streaming
+STREAMING_STATE_KEY_TTL = int(os.environ.get("STREAMING_STATE_KEY_TTL", 60))
+STREAMING_LONG_POLL_TIMEOUT = int(os.environ.get("STREAMING_LONG_POLL_TIMEOUT", 25))
+STREAMING_READER_SWEEP_POLL_INTERVAL = int(os.environ.get("STREAMING_READER_SWEEP_POLL_INTERVAL", 15))
+STREAMING_READER_SWEEP_EMPTY_GRACE_PERIOD = int(os.environ.get("STREAMING_READER_SWEEP_EMPTY_GRACE_PERIOD", 20))
+MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API_URL", default="http://localhost:9997")
+
+# Event processing -- SQS queue carrying the S3 detection-image notifications.
+SQS_QUEUE_NAME = os.environ.get('SQS_QUEUE_NAME', '')
+SQS_MAX_NUMBER_OF_MESSAGES = int(os.environ.get('SQS_MAX_NUMBER_OF_MESSAGES', 10))
+SQS_WAIT_TIME_SECONDS = int(os.environ.get('SQS_WAIT_TIME_SECONDS', 10))
+
+# Rules model. Shape matches what events.ml.factory.build_rules_model expects;
+# it takes a plain dict so the ml package stays free of Django imports.
+ML_CONFIG = {
+    'model_type': os.environ.get('ML_MODEL_TYPE', 'api'),
+    'api_model_name': os.environ.get('ML_API_MODEL_NAME', 'gemini-3.1-flash-lite'),
+    'hosted_model_name': os.environ.get('ML_HOSTED_MODEL_NAME'),
+    'model_weights_dir': os.environ.get('ML_MODEL_WEIGHTS_DIR', 'ml_weights'),
+}
+
+# Environment Tracking
 ENVIRONMENT = os.environ.get('ENV', default="dev")
 DEV_IP = os.environ.get('DEV_IP', default="127.0.0.1")
+
+# Celery
+# db 1, while the streaming state keys live in db 0: a FLUSHDB while debugging
+# streaming would otherwise drop every queued task with it.
+CELERY_BROKER_URL = os.environ.get(
+    'CELERY_BROKER_URL', default=f'redis://{REDIS_HOST}:{REDIS_PORT}/1')
+# Nothing waits on a task's return value -- the work is writing rows, stopping
+# streams, and sending pushes -- so results would only accumulate in Redis.
+CELERY_RESULT_BACKEND = None
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TIMEZONE = TIME_ZONE
+# Ack after the task returns, not when it's delivered, so a worker killed
+# mid-image puts the message back instead of silently dropping it.
+CELERY_TASK_ACKS_LATE = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1

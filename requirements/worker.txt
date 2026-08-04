@@ -1,0 +1,7 @@
+# The Celery worker: the Django project plus the event-processing runtime.
+# This is the deployed processor -- it uses the Gemini API backend, so none of
+# the torch/transformers stack is needed here (see hosted.txt).
+-r base.txt
+Pillow==12.2.0
+google-genai==2.16.0
+pydantic==2.13.4

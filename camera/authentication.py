@@ -2,10 +2,13 @@ import hashlib
 import logging
 from rest_framework import authentication, exceptions
 from rest_framework_simplejwt.authentication import JWTAuthentication
-from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed
+from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFailed, TokenError
+from asgiref.sync import sync_to_async
 from .models import Camera
 
 logger = logging.getLogger('Camera Auth API')
+
+jwt_auth = JWTAuthentication()
 
 class CameraTokenAuthentication(authentication.BaseAuthentication):
     keyword = b'device'  # matches "Authorization: Device <token>"
@@ -66,3 +69,24 @@ class CameraJWTAuthentication(JWTAuthentication):
             raise AuthenticationFailed('Camera has been revoked.')
 
         return camera
+
+async def authenticate_jwt_async(request):
+    auth_header = request.headers.get('Authorization', "")
+    if not auth_header.startswith('Bearer '):
+        return None
+
+    raw_token = auth_header[len('Bearer '):]
+    try:
+        validated_token = await sync_to_async(jwt_auth.get_validated_token)(raw_token)
+        public_camera_id = validated_token.get('public_camera_id')
+        await Camera.objects.aget(public_camera_id=public_camera_id, revoked=False)
+    except (TokenError, AuthenticationFailed) as e:
+        return None
+    except Camera.DoesNotExist:
+        logger.warning('Camera with public_camera_id does not exist.')
+        return None
+
+    return public_camera_id
+
+
+
