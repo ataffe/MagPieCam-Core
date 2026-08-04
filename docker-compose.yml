@@ -23,6 +23,8 @@ services:
   scoutcam-redis:
     image: redis
     container_name: scoutcam-redis
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -33,7 +35,7 @@ services:
 
   scoutcam-web-service:
     build: .
-    image: scoutcam-web-service:0.1.0
+    image: scoutcamwebservice:0.1.0
     container_name: scoutcam-web-service
     env_file:
       - .env-docker
@@ -44,26 +46,47 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
-    # Uncomment to give the container access to your AWS credentials, matching
-    # the (disabled) mount in the old start_service_container-dev.sh script.
-    # volumes:
-    #   - ~/.aws:/home/appuser/.aws:ro
     networks:
       - scoutcam-network
 
+  # The worker runs both camera.tasks (stream sweeping) and events.tasks (image
+  # evaluation), so it needs requirements/worker.txt -- the default base.txt has
+  # no Pillow or google-genai and events.tasks would fail to import.
   scoutcam-celery-worker:
     build:
       context: .
       args:
         REQUIREMENTS: requirements/worker.txt
-    image: scoutcamworker-dev
+    image: scoutcamwebservice-worker:0.1.0
     container_name: scoutcam-celery-worker
     command: celery -A scoutcamservice worker -l info
     env_file:
       - .env-docker
+    tty: true
+    stdin_open: true
     depends_on:
       scoutcam-postgres:
         condition: service_healthy
+      scoutcam-redis:
+        condition: service_healthy
+    networks:
+      - scoutcam-network
+
+  # Beat only schedules; it shares the worker image so there's one build to keep
+  # in sync rather than three.
+  scoutcam-celery-beat:
+    build:
+      context: .
+      args:
+        REQUIREMENTS: requirements/worker.txt
+    image: scoutcamwebservice-worker:0.1.0
+    container_name: scoutcam-celery-beat
+    command: celery -A scoutcamservice beat -l info
+    env_file:
+      - .env-docker
+    tty: true
+    stdin_open: true
+    depends_on:
       scoutcam-redis:
         condition: service_healthy
     networks:
@@ -74,7 +97,7 @@ services:
       context: .
       args:
         REQUIREMENTS: requirements/worker.txt
-    image: scoutcamworker-dev
+    image: scoutcamwebservice-worker:0.1.0
     container_name: scoutcam-event-consumer
     command: python manage.py consume_events
     env_file:
@@ -99,6 +122,7 @@ services:
       - "8554:8554"
       - "8888:8888"
       - "8889:8889"
+      - "9997:9997"
       - "8189:8189/udp"
     networks:
       - scoutcam-network
@@ -110,3 +134,8 @@ networks:
 
 volumes:
   scoutcam-postgres-data:
+
+
+# Cheat Sheet
+# Build image and start container - docker compose up -d --build <container_nam>
+# Restart container - docker compose up -d --no-deps <container_name>

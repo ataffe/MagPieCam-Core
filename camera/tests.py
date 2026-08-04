@@ -1,7 +1,13 @@
+import asyncio
 import hashlib
-from unittest.mock import patch, MagicMock
+import json
+import time
+import uuid
+from unittest.mock import patch, MagicMock, AsyncMock
 
+from asgiref.sync import sync_to_async
 from django.test import TestCase, override_settings
+from django.test.client import AsyncRequestFactory
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -9,6 +15,8 @@ from users.models import User
 from camera.models import Camera
 from camera.s3_client import get_s3_client
 from camera.constants import UploadType
+from camera.streaming_control import streaming_state_key, empty_key, publish_command
+from camera.views import streaming_command_view
 from django.urls import reverse
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 
@@ -620,7 +628,8 @@ class CameraTokenExchangeTests(TestCase):
 
 class MediaMtxAuthTests(TestCase):
     """Covers MediaMtxAuthView, the HTTP webhook MediaMTX calls to authorize a
-    publish/read using either a camera-scoped JWT or a human user's JWT."""
+    publish (camera pushing video in) or a read (viewer watching), identified
+    by `path` (== public_camera_id) and a JWT in `token`."""
 
     def setUp(self):
         self.client = APIClient()
@@ -628,50 +637,321 @@ class MediaMtxAuthTests(TestCase):
             username='alice', email='alice@example.com', password='StrongPass123!',
             first_name='Alice', last_name='Smith',
         )
+        self.other_user = User.objects.create_user(
+            username='bob', email='bob@example.com', password='StrongPass123!',
+            first_name='Bob', last_name='Jones',
+        )
         self.camera = Camera.objects.create(owner=self.user, location='Front door')
 
-    def authorize(self, token, user='', protocol='rtsp'):
+    def authorize(self, action, token, path=None, user=''):
         return self.client.post(
             reverse('camera:mediamtx_auth'),
-            data={'user': user, 'token': token, 'protocol': protocol},
+            data={
+                'user': user,
+                'token': token,
+                'action': action,
+                'path': str(self.camera.public_camera_id) if path is None else path,
+            },
             format='json',
         )
 
-    def test_valid_camera_jwt_returns_200(self):
-        response = self.authorize(camera_access_token(self.camera))
+    def test_publish_with_matching_device_jwt_returns_200(self):
+        response = self.authorize('publish', camera_access_token(self.camera))
         self.assertEqual(response.status_code, 200)
 
-    def test_valid_user_jwt_returns_200(self):
+    def test_publish_with_a_different_cameras_jwt_returns_403(self):
+        other_camera = Camera.objects.create(owner=self.user, location='Garage')
+        response = self.authorize('publish', camera_access_token(other_camera))
+        self.assertEqual(response.status_code, 403)
+
+    def test_publish_with_a_human_users_jwt_returns_403(self):
         access = str(RefreshToken.for_user(self.user).access_token)
-        response = self.authorize(access)
+        response = self.authorize('publish', access)
+        self.assertEqual(response.status_code, 403)
+
+    @patch('camera.views.publish_command', new_callable=AsyncMock)
+    def test_read_with_owners_jwt_returns_200_and_publishes_start(self, mock_publish_command):
+        access = str(RefreshToken.for_user(self.user).access_token)
+        response = self.authorize('read', access)
         self.assertEqual(response.status_code, 200)
+        mock_publish_command.assert_awaited_once_with(str(self.camera.public_camera_id), "start")
 
-    def test_camera_jwt_for_deleted_camera_returns_404(self):
-        token = camera_access_token(self.camera)
-        self.camera.delete()
-        response = self.authorize(token)
-        self.assertEqual(response.status_code, 404)
+    def test_read_with_non_owners_jwt_returns_403(self):
+        access = str(RefreshToken.for_user(self.other_user).access_token)
+        response = self.authorize('read', access)
+        self.assertEqual(response.status_code, 403)
 
-    def test_camera_jwt_for_revoked_camera_returns_401(self):
-        self.camera.revoked = True
-        self.camera.save()
-        response = self.authorize(camera_access_token(self.camera))
+    def test_read_with_a_camera_jwt_returns_401(self):
+        response = self.authorize('read', camera_access_token(self.camera))
         self.assertEqual(response.status_code, 401)
 
-    def test_user_jwt_for_deleted_user_returns_401(self):
-        access = str(RefreshToken.for_user(self.user).access_token)
-        self.user.delete()
-        response = self.authorize(access)
+    def test_unknown_action_returns_401(self):
+        response = self.authorize('delete', camera_access_token(self.camera))
+        self.assertEqual(response.status_code, 401)
+
+    def test_camera_does_not_exist_returns_404(self):
+        response = self.authorize('publish', 'irrelevant', path=str(uuid.uuid4()))
+        self.assertEqual(response.status_code, 404)
+
+    def test_revoked_camera_returns_401(self):
+        self.camera.revoked = True
+        self.camera.save()
+        response = self.authorize('publish', camera_access_token(self.camera))
         self.assertEqual(response.status_code, 401)
 
     def test_garbage_token_returns_401(self):
-        response = self.authorize('not-a-real-token')
+        response = self.authorize('publish', 'not-a-real-token')
         self.assertEqual(response.status_code, 401)
 
-    def test_missing_token_field_returns_400(self):
+    def test_missing_action_field_returns_400(self):
         response = self.client.post(
             reverse('camera:mediamtx_auth'),
-            data={'user': '', 'protocol': 'rtsp'},
+            data={'user': '', 'token': 'irrelevant', 'path': str(self.camera.public_camera_id)},
             format='json',
         )
         self.assertEqual(response.status_code, 400)
+
+
+class StartStreamingViewTests(TestCase):
+    """Covers StartStreamingView, which lets a camera's owner (the iOS app)
+    kick off on-demand streaming without waiting for a MediaMTX reader."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='alice', email='alice@example.com', password='StrongPass123!',
+            first_name='Alice', last_name='Smith',
+        )
+        self.other_user = User.objects.create_user(
+            username='bob', email='bob@example.com', password='StrongPass123!',
+            first_name='Bob', last_name='Jones',
+        )
+        self.camera = Camera.objects.create(owner=self.user, location='Front door')
+        self.authenticate(self.user)
+
+    def authenticate(self, user):
+        access = str(RefreshToken.for_user(user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
+
+    def start(self, public_camera_id=None):
+        return self.client.post(
+            reverse('camera:start_streaming', kwargs={
+                'public_camera_id': public_camera_id or self.camera.public_camera_id,
+            })
+        )
+
+    @patch('camera.views.publish_command', new_callable=AsyncMock)
+    def test_owner_can_start_streaming(self, mock_publish_command):
+        response = self.start()
+        self.assertEqual(response.status_code, 200)
+        mock_publish_command.assert_awaited_once_with(self.camera.public_camera_id, "start")
+
+    def test_non_owner_returns_401(self):
+        self.authenticate(self.other_user)
+        response = self.start()
+        self.assertEqual(response.status_code, 401)
+
+    def test_revoked_camera_returns_401(self):
+        self.camera.revoked = True
+        self.camera.save()
+        response = self.start()
+        self.assertEqual(response.status_code, 401)
+
+    def test_unknown_camera_returns_404(self):
+        """Regression test: Camera.objects.get() used to be unwrapped and would
+        500 on a missing camera instead of returning a clean 404."""
+        response = self.start(public_camera_id=uuid.uuid4())
+        self.assertEqual(response.status_code, 404)
+
+    def test_unauthenticated_returns_401(self):
+        self.client.credentials()
+        response = self.start()
+        self.assertEqual(response.status_code, 401)
+
+
+class StreamingCommandViewTests(TestCase):
+    """Covers streaming_command_view, the long-poll endpoint a camera polls to
+    learn when it should start/stop publishing to MediaMTX."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='alice', email='alice@example.com', password='StrongPass123!',
+            first_name='Alice', last_name='Smith',
+        )
+        self.camera = Camera.objects.create(owner=self.user, location='Front door')
+        self.factory = AsyncRequestFactory()
+        self.addCleanup(self._cleanup_redis_keys)
+
+    def _cleanup_redis_keys(self):
+        import redis
+        r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+        r.delete(streaming_state_key(str(self.camera.public_camera_id)))
+
+    def _request(self, token=None):
+        headers = {}
+        if token is not None:
+            headers['Authorization'] = f'Bearer {token}'
+        return self.factory.post(reverse('camera:streaming_command'), headers=headers)
+
+    async def test_missing_token_returns_401(self):
+        response = await streaming_command_view(self._request())
+        self.assertEqual(response.status_code, 401)
+
+    async def test_invalid_token_returns_401(self):
+        response = await streaming_command_view(self._request('not-a-real-token'))
+        self.assertEqual(response.status_code, 401)
+
+    async def test_revoked_camera_returns_401(self):
+        self.camera.revoked = True
+        await sync_to_async(self.camera.save)()
+        response = await streaming_command_view(self._request(camera_access_token(self.camera)))
+        self.assertEqual(response.status_code, 401)
+
+    async def test_already_streaming_returns_start_immediately(self):
+        await publish_command(str(self.camera.public_camera_id), "start")
+        with override_settings(STREAMING_LONG_POLL_TIMEOUT=5):
+            response = await streaming_command_view(self._request(camera_access_token(self.camera)))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.content)['command'], 'start')
+
+    async def test_message_published_during_poll_is_returned(self):
+        token = camera_access_token(self.camera)
+
+        async def delayed_publish():
+            await asyncio.sleep(0.2)
+            await publish_command(str(self.camera.public_camera_id), "stop")
+
+        with override_settings(STREAMING_LONG_POLL_TIMEOUT=5):
+            response, _ = await asyncio.gather(
+                streaming_command_view(self._request(token)),
+                delayed_publish(),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.content)['command'], 'stop')
+
+    async def test_timeout_with_no_command_returns_none(self):
+        token = camera_access_token(self.camera)
+        with override_settings(STREAMING_LONG_POLL_TIMEOUT=0.3):
+            response = await streaming_command_view(self._request(token))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.content)['command'], 'none')
+
+    async def test_unexpected_error_during_poll_is_not_swallowed(self):
+        """Regression test: the poll used to be wrapped in a bare `except:`,
+        which caught every exception (not just the timeout) and silently
+        reported {"command": "none"} instead of surfacing the real bug."""
+        token = camera_access_token(self.camera)
+
+        class BoomPubSub:
+            async def subscribe(self, *a, **k):
+                pass
+
+            async def unsubscribe(self, *a, **k):
+                pass
+
+            async def aclose(self):
+                pass
+
+            async def listen(self):
+                raise RuntimeError("boom")
+                yield  # pragma: no cover - makes this an async generator
+
+        class FakeRedisClient:
+            async def get(self, key):
+                return None
+
+            def pubsub(self):
+                return BoomPubSub()
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+        with patch('camera.views.get_redis_client', return_value=FakeRedisClient()):
+            with self.assertRaises(RuntimeError):
+                await streaming_command_view(self._request(token))
+
+
+class StreamReaderSweepTests(TestCase):
+    """Covers camera/tasks.py: the Celery Beat task that stops cameras once
+    MediaMTX reports no readers for longer than the grace period."""
+
+    def setUp(self):
+        from camera.tasks import redis_client
+        self.redis_client = redis_client
+        self.public_camera_id = str(uuid.uuid4())
+        self.addCleanup(self._cleanup_redis_keys)
+
+    def _cleanup_redis_keys(self):
+        self.redis_client.delete(streaming_state_key(self.public_camera_id))
+        self.redis_client.delete(empty_key(self.public_camera_id))
+        self.redis_client.delete("lock:sweep_readers")
+
+    def test_evaluate_camera_stream_with_readers_clears_empty_marker(self):
+        from camera.tasks import evaluate_camera_stream
+        self.redis_client.set(empty_key(self.public_camera_id), time.time())
+        evaluate_camera_stream(self.public_camera_id, reader_count=1)
+        self.assertIsNone(self.redis_client.get(empty_key(self.public_camera_id)))
+
+    def test_evaluate_camera_stream_starts_grace_clock_when_first_empty(self):
+        from camera.tasks import evaluate_camera_stream
+        evaluate_camera_stream(self.public_camera_id, reader_count=0)
+        self.assertIsNotNone(self.redis_client.get(empty_key(self.public_camera_id)))
+
+    def test_evaluate_camera_stream_does_not_stop_before_grace_period(self):
+        from camera.tasks import evaluate_camera_stream
+        self.redis_client.set(empty_key(self.public_camera_id), time.time())
+        self.redis_client.setex(streaming_state_key(self.public_camera_id), 60, "stream")
+        evaluate_camera_stream(self.public_camera_id, reader_count=0)
+        self.assertEqual(self.redis_client.get(streaming_state_key(self.public_camera_id)), "stream")
+
+    @override_settings(STREAMING_READER_SWEEP_EMPTY_GRACE_PERIOD=0)
+    def test_evaluate_camera_stream_stops_after_grace_period(self):
+        from camera.tasks import evaluate_camera_stream
+        self.redis_client.set(empty_key(self.public_camera_id), time.time() - 100)
+        self.redis_client.setex(streaming_state_key(self.public_camera_id), 60, "stream")
+        evaluate_camera_stream(self.public_camera_id, reader_count=0)
+        self.assertIsNone(self.redis_client.get(streaming_state_key(self.public_camera_id)))
+        self.assertIsNone(self.redis_client.get(empty_key(self.public_camera_id)))
+
+    @patch('camera.tasks.httpx.get')
+    @override_settings(STREAMING_READER_SWEEP_EMPTY_GRACE_PERIOD=0)
+    def test_sweep_readers_stops_camera_with_no_readers_past_grace_period(self, mock_get):
+        self.redis_client.setex(streaming_state_key(self.public_camera_id), 60, "stream")
+        self.redis_client.set(empty_key(self.public_camera_id), time.time() - 100)
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "items": [{"name": self.public_camera_id, "ready": True, "readers": []}]
+        }
+        mock_get.return_value = mock_response
+
+        from camera.tasks import sweep_readers
+        sweep_readers()
+
+        self.assertIsNone(self.redis_client.get(streaming_state_key(self.public_camera_id)))
+
+    @patch('camera.tasks.httpx.get')
+    def test_sweep_readers_skips_paths_that_are_not_ready(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "items": [{"name": self.public_camera_id, "ready": False, "readers": []}]
+        }
+        mock_get.return_value = mock_response
+
+        from camera.tasks import sweep_readers
+        sweep_readers()
+
+        self.assertIsNone(self.redis_client.get(empty_key(self.public_camera_id)))
+
+    @patch('camera.tasks.httpx.get')
+    def test_sweep_readers_skips_when_lock_already_held(self, mock_get):
+        lock = self.redis_client.lock("lock:sweep_readers", timeout=10)
+        self.assertTrue(lock.acquire(blocking=False))
+        try:
+            from camera.tasks import sweep_readers
+            sweep_readers()
+            mock_get.assert_not_called()
+        finally:
+            lock.release()

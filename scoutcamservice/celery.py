@@ -1,6 +1,8 @@
 import os
+from datetime import timedelta
 
 from celery import Celery
+from django.conf import settings
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'scoutcamservice.settings')
 
@@ -10,5 +12,11 @@ app = Celery('scoutcamservice')
 # and friends stay in settings.py with everything else.
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
-# Picks up tasks.py in each installed app.
 app.autodiscover_tasks()
+
+app.conf.beat_schedule = {
+    'sweep-readers': {
+        'task': 'camera.tasks.sweep_readers',
+        'schedule': timedelta(seconds=settings.STREAMING_READER_SWEEP_POLL_INTERVAL),
+    },
+}

@@ -3,7 +3,7 @@ import hmac
 import logging
 import secrets
 import uuid
-import redis
+import asyncio
 
 from rest_framework import status
 from rest_framework import viewsets, permissions
@@ -15,6 +15,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.utils import timezone
 from django.conf import settings
+from django.http import JsonResponse
+from asgiref.sync import async_to_sync
 
 from camera.models import Camera
 from camera.serializers import (
@@ -23,18 +25,13 @@ from camera.serializers import (
     ProvisionCameraSerializer,
     ClaimCameraSerializer,
     MediaMtxAuthSerializer)
-from camera.authentication import CameraTokenAuthentication, CameraJWTAuthentication
+from camera.authentication import CameraTokenAuthentication, CameraJWTAuthentication, authenticate_jwt_async
 from camera.s3_client import get_upload_url
 from camera.constants import UploadType
+from camera.streaming_control import streaming_state_key, channel, publish_command, get_redis_client
 
 ALLOWED_TYPES = {"image/jpeg"}
 logger = logging.getLogger('Camera API')
-
-redis_client = redis.from_url(
-    settings.REDIS_URL,
-    decode_responses=True,
-    max_connections=200,  # >= expected concurrent cameras, with headroom
-)
 
 class CameraTokenExchangeView(APIView):
     authentication_classes = [CameraTokenAuthentication]
@@ -48,6 +45,8 @@ class CameraTokenExchangeView(APIView):
 
         return Response({'access': str(token)}, status=status.HTTP_200_OK)
 
+def user_can_view(user, camera):
+    return user == camera.owner
 
 class MediaMtxAuthView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -56,24 +55,35 @@ class MediaMtxAuthView(APIView):
     def post(self, request):
         serializer = MediaMtxAuthSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        action = serializer.validated_data['action']
+        public_camera_id = serializer.validated_data['path']
         token = serializer.validated_data['token']
-        logger.info(f'Received media mtx auth request for token: {token}')
+        try:
+            camera = Camera.objects.get(public_camera_id=public_camera_id)
+        except Camera.DoesNotExist:
+            return Response({'detail': 'Camera does not exist'},
+                            status=status.HTTP_404_NOT_FOUND)
+        if camera.revoked:
+            return Response({'detail': 'Camera has been revoked'},
+                            status=status.HTTP_401_UNAUTHORIZED)
 
         jwt_auth = JWTAuthentication()
         validated_token = jwt_auth.get_validated_token(token)
-        public_camera_id = validated_token.get('public_camera_id')
 
-        # The JWT must either contain a user or a public_camera_id
-        if not public_camera_id:
-            jwt_auth.get_user(validated_token)
+        if action == "publish":
+            # Must be a device token, and specifically THIS camera's device.
+            if str(validated_token.get('public_camera_id')) != str(camera.public_camera_id):
+                return Response(status=status.HTTP_403_FORBIDDEN)
+        elif action == "read":
+            # Must be a real user, authorized for THIS camera.
+            user = jwt_auth.get_user(validated_token)
+            if not user_can_view(user, camera):  # your ownership / sharing check
+                return Response(status=status.HTTP_403_FORBIDDEN)
+            async_to_sync(publish_command)(str(camera.public_camera_id), "start")
         else:
-            try:
-                camera = Camera.objects.get(public_camera_id=public_camera_id)
-            except Camera.DoesNotExist:
-                return Response({'detail': 'Camera does not exist'}, status=status.HTTP_404_NOT_FOUND)
-            if camera.revoked:
-                return Response({'detail': 'Camera has been revoked'}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response(status=status.HTTP_401_UNAUTHORIZED)
 
+        logger.info(f"mediamtx auth ok: action={action} camera={public_camera_id}")
         return Response(status=status.HTTP_200_OK)
 
 class CameraViewSet(viewsets.ModelViewSet):
@@ -221,3 +231,47 @@ class CameraPreviewTimeView(APIView):
         camera.save()
         return Response(status=status.HTTP_200_OK)
 
+
+class StartStreamingView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, public_camera_id):
+        try:
+            camera = Camera.objects.get(public_camera_id=public_camera_id)
+        except Camera.DoesNotExist:
+            return Response({'detail': 'Camera does not exist'}, status=status.HTTP_404_NOT_FOUND)
+        if camera.owner != request.user or camera.revoked:
+            return Response(status=status.HTTP_401_UNAUTHORIZED)
+        async_to_sync(publish_command)(camera.public_camera_id, "start")
+        logger.debug(f'Request start streaming for camera with public_camera_id: {camera.public_camera_id}')
+        return Response(status=status.HTTP_200_OK)
+
+
+async def streaming_command_view(request):
+    public_camera_id = await authenticate_jwt_async(request)
+    if not public_camera_id:
+        return JsonResponse({"message": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+
+    ch = channel(public_camera_id=public_camera_id)
+    stream_state_key = streaming_state_key(public_camera_id=public_camera_id)
+    async with get_redis_client() as redis_client:
+        pubsub = redis_client.pubsub()
+        try:
+            # Must subscribe first in case a message has already been published
+            await pubsub.subscribe(ch)
+
+            # Check if a message is already published to the channel
+            if await redis_client.get(stream_state_key) == "stream":
+                return JsonResponse({"command": "start"}, status=status.HTTP_200_OK)
+
+            try:
+                async with asyncio.timeout(settings.STREAMING_LONG_POLL_TIMEOUT):
+                    async for msg in pubsub.listen():
+                        if msg["type"] == "message":
+                            return JsonResponse({"command": msg["data"]}, status=status.HTTP_200_OK)
+            except TimeoutError:
+                return JsonResponse({"command": "none"}, status=status.HTTP_200_OK)
+
+        finally:
+            await pubsub.unsubscribe(ch)
+            await pubsub.aclose()
