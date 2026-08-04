@@ -1,14 +1,11 @@
 # myapp/tasks.py
 #
-# Poll-only stream stopping, as a scheduled Celery task.
+# Camera stream clean up Celery task.
 #
 # Celery Beat fires sweep_readers() every POLL_INTERVAL seconds; a Celery worker
 # runs it. It reads reader counts straight from MediaMTX (the authoritative
 # observer of who's connected, including clients that vanished ungracefully),
 # and stops any camera that's been empty past the grace window.
-#
-# NOTE: Celery tasks are SYNCHRONOUS, so everything here uses sync clients
-# (redis, httpx sync) — no async/await, unlike the long-poll view.
 
 import time
 

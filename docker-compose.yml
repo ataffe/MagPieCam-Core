@@ -35,7 +35,7 @@ services:
 
   scoutcam-web-service:
     build: .
-    image: scoutcamwebservice:0.1.0
+    image: scoutcam-webservice:0.1.0
     container_name: scoutcam-web-service
     env_file:
       - .env-docker
@@ -44,20 +44,21 @@ services:
     depends_on:
       scoutcam-postgres:
         condition: service_healthy
+      scout-moto:
+        condition: service_healthy
     ports:
       - "8000:8000"
     networks:
       - scoutcam-network
 
   # The worker runs both camera.tasks (stream sweeping) and events.tasks (image
-  # evaluation), so it needs requirements/worker.txt -- the default base.txt has
-  # no Pillow or google-genai and events.tasks would fail to import.
+  # evaluation), so it needs requirements/worker.txt
   scoutcam-celery-worker:
     build:
       context: .
       args:
         REQUIREMENTS: requirements/worker.txt
-    image: scoutcamwebservice-worker:0.1.0
+    image: scoutcam-webservice-worker:0.1.0
     container_name: scoutcam-celery-worker
     command: celery -A scoutcamservice worker -l info
     env_file:
@@ -69,6 +70,8 @@ services:
         condition: service_healthy
       scoutcam-redis:
         condition: service_healthy
+      scout-moto:
+        condition: service_healthy
     networks:
       - scoutcam-network
 
@@ -79,7 +82,7 @@ services:
       context: .
       args:
         REQUIREMENTS: requirements/worker.txt
-    image: scoutcamwebservice-worker:0.1.0
+    image: scoutcam-webservice-worker:0.1.0
     container_name: scoutcam-celery-beat
     command: celery -A scoutcamservice beat -l info
     env_file:
@@ -97,7 +100,7 @@ services:
       context: .
       args:
         REQUIREMENTS: requirements/worker.txt
-    image: scoutcamwebservice-worker:0.1.0
+    image: scoutcam-webservice-worker:0.1.0
     container_name: scoutcam-event-consumer
     command: python manage.py consume_events
     env_file:
@@ -107,6 +110,29 @@ services:
         condition: service_healthy
       scoutcam-redis:
         condition: service_healthy
+      scout-moto:
+        condition: service_healthy
+    networks:
+      - scoutcam-network
+
+  # Mocks S3 and SQS for local dev so nothing touches real AWS. Seeds the
+  # buckets/queue from .env-docker on every start since moto keeps no state.
+  scout-moto:
+    build:
+      context: ./docker/moto
+    image: scoutcam-moto:0.1.0
+    container_name: scout-moto
+    env_file:
+      - .env-docker
+    # Host-side 5000 is commonly taken by macOS's AirPlay Receiver; the
+    # container-internal port (used by the other services) is unaffected.
+    ports:
+      - "5001:5000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/moto-api/')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     networks:
       - scoutcam-network
 
@@ -134,8 +160,3 @@ networks:
 
 volumes:
   scoutcam-postgres-data:
-
-
-# Cheat Sheet
-# Build image and start container - docker compose up -d --build <container_nam>
-# Restart container - docker compose up -d --no-deps <container_name>

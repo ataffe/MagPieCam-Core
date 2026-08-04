@@ -8,8 +8,8 @@ drf_nested_routers==0.95.0
 django-extensions==4.1
 psycopg[binary]==3.3.3
 gunicorn==25.3.0
+uvicorn==0.52.1
 boto3==1.43.14
 redis==7.4.0
 celery==5.6.3
-# camera.tasks.sweep_readers polls the MediaMTX API over HTTP.
 httpx==0.28.1
