@@ -54,6 +54,7 @@ class ClaimCameraSerializer(serializers.Serializer):
     )
 
 class MediaMtxAuthSerializer(serializers.Serializer):
-    user = serializers.CharField(allow_blank=True)
-    token = serializers.CharField(allow_blank=True)
-    protocol = serializers.CharField(allow_blank=True)
+    user = serializers.CharField(allow_blank=True, trim_whitespace=True)
+    token = serializers.CharField(allow_blank=True, trim_whitespace=True)
+    action = serializers.CharField(allow_blank=True, trim_whitespace=True)
+    path = serializers.CharField(allow_blank=True, trim_whitespace=True)

@@ -23,10 +23,14 @@ services:
   scoutcam-redis:
     image: redis
     container_name: scoutcam-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - scoutcam-network
 
   scoutcam-web-service:
     build: .
-    image: scoutcamwebservice-dev
+    image: scoutcamwebservice:0.1.0
     container_name: scoutcam-web-service
     env_file:
       - .env-docker
@@ -37,10 +41,36 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
-    # Uncomment to give the container access to your AWS credentials, matching
-    # the (disabled) mount in the old start_service_container-dev.sh script.
-    # volumes:
-    #   - ~/.aws:/home/appuser/.aws:ro
+    networks:
+      - scoutcam-network
+
+  scoutcam-celery-worker:
+    build: .
+    command: celery -A scoutcamservice worker -l info
+    image: scoutcamwebservice-celery-worker:0.1.0
+    container_name: scoutcam-celery-worker
+    env_file:
+      - .env-docker
+    tty: true
+    stdin_open: true
+    depends_on:
+      - scoutcam-redis
+      - scoutcam-web-service
+    networks:
+      - scoutcam-network
+
+  scoutcam-celery-beat:
+    build: .
+    command: celery -A scoutcamservice beat -l info
+    image: scoutcamwebservice-celery-beat:0.1.0
+    container_name: scoutcam-celery-beat
+    env_file:
+      - .env-docker
+    tty: true
+    stdin_open: true
+    depends_on:
+      - scoutcam-redis
+      - scoutcam-web-service
     networks:
       - scoutcam-network
 
@@ -56,6 +86,7 @@ services:
       - "8554:8554"
       - "8888:8888"
       - "8889:8889"
+      - "9997:9997"
       - "8189:8189/udp"
     networks:
       - scoutcam-network
@@ -67,3 +98,8 @@ networks:
 
 volumes:
   scoutcam-postgres-data:
+
+
+# Cheat Sheet
+# Build image and start container - docker compose up -d --build <container_nam>
+# Restart container - docker compose up -d --no-deps <container_name>

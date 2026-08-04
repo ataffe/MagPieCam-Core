@@ -163,7 +163,7 @@ AUTH_USER_MODEL = 'users.User'
 # TODO: DON'T LET THIS INTO PRODUCTION!!!!!
 ALLOWED_HOSTS = ['*']
 
-# AWS Environment Variables
+# AWS
 AWS_REGION = os.environ.get('AWS_REGION', '')
 AWS_IMG_DETECTION_BUCKET = os.environ.get('AWS_IMG_DETECTION_BUCKET', '')
 AWS_IMG_PREVIEW_BUCKET = os.environ.get('AWS_IMG_PREVIEW_BUCKET', '')
@@ -171,13 +171,20 @@ AWS_ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL", default=None)
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", default="test")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", default="test")
 
-# Polling
-STREAMING_LONG_POLL_TIMEOUT = os.environ.get("STREAMING_LONG_POLL_TIMEOUT", default=25)
-STREAMING_REDIS_TTL = os.environ.get("STREAMING_REDIS_TTL", default=60)
-
 # Redis
-REDIS_URL = os.environ.get('REDIS_URL', default="redis://localhost:6379")
+REDIS_HOST = os.environ.get('REDIS_HOST', default="localhost")
+REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
 
-# Environment Tracking Variables
+# Streaming
+STREAMING_STATE_KEY_TTL = int(os.environ.get("STREAMING_STATE_KEY_TTL", 60))
+STREAMING_LONG_POLL_TIMEOUT = int(os.environ.get("STREAMING_LONG_POLL_TIMEOUT", 25))
+STREAMING_READER_SWEEP_POLL_INTERVAL = int(os.environ.get("STREAMING_READER_SWEEP_POLL_INTERVAL", 15))
+STREAMING_READER_SWEEP_EMPTY_GRACE_PERIOD = int(os.environ.get("STREAMING_READER_SWEEP_EMPTY_GRACE_PERIOD", 20))
+MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API_URL", default="http://localhost:9997")
+
+# Environment Tracking
 ENVIRONMENT = os.environ.get('ENV', default="dev")
 DEV_IP = os.environ.get('DEV_IP', default="127.0.0.1")
+
+# Celery
+CELERY_BROKER_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}'
