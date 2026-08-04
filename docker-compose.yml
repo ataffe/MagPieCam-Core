@@ -2,6 +2,8 @@ services:
   scoutcam-postgres:
     image: postgres
     container_name: scoutcam-postgres
+    env_file:
+      - .env-docker
     environment:
       POSTGRES_DB: ${DATABASE_NAME}
       POSTGRES_USER: ${DATABASE_USERNAME}

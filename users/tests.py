@@ -129,6 +129,101 @@ class UserTests(TestCase):
         response = self.client.get(reverse('users:user_list'))
         self.assertEqual(response.status_code, 401)
 
+class UserAPNsTokenTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username='testuser',
+            email='test@example.com',
+            password='testpassword123',
+            first_name='Test',
+            last_name='User',
+        )
+
+    def authenticate(self, user):
+        refresh = RefreshToken.for_user(user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {refresh.access_token}')
+
+    def test_set_apns_token_success(self):
+        self.authenticate(self.user)
+        response = self.client.post(
+            reverse('users:apns_token'),
+            data={'apns_token': 'device-token-1'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.apns_token, 'device-token-1')
+
+    def test_set_apns_token_updates_existing_token(self):
+        self.authenticate(self.user)
+        self.client.post(
+            reverse('users:apns_token'),
+            data={'apns_token': 'device-token-1'},
+            format='json',
+        )
+        response = self.client.post(
+            reverse('users:apns_token'),
+            data={'apns_token': 'device-token-2'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.apns_token, 'device-token-2')
+
+    def test_resubmitting_same_apns_token_succeeds(self):
+        self.authenticate(self.user)
+        self.client.post(
+            reverse('users:apns_token'),
+            data={'apns_token': 'device-token-1'},
+            format='json',
+        )
+        response = self.client.post(
+            reverse('users:apns_token'),
+            data={'apns_token': 'device-token-1'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_set_apns_token_missing_returns_400(self):
+        self.authenticate(self.user)
+        response = self.client.post(
+            reverse('users:apns_token'),
+            data={},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_set_apns_token_blank_returns_400(self):
+        self.authenticate(self.user)
+        response = self.client.post(
+            reverse('users:apns_token'),
+            data={'apns_token': ''},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_set_apns_token_already_used_by_another_user_returns_400(self):
+        other_user = make_user('other', 'other@example.com')
+        other_user.apns_token = 'device-token-1'
+        other_user.save()
+
+        self.authenticate(self.user)
+        response = self.client.post(
+            reverse('users:apns_token'),
+            data={'apns_token': 'device-token-1'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_set_apns_token_unauthenticated_returns_401(self):
+        response = self.client.post(
+            reverse('users:apns_token'),
+            data={'apns_token': 'device-token-1'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 401)
+
 class RegisterTests(TestCase):
     def setUp(self):
         self.client = APIClient()

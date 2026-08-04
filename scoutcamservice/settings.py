@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     'rules',
     'users',
     'camera',
+    'notifications',
     'django_extensions',
     'rest_framework',
     'rest_framework_simplejwt',

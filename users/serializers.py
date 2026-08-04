@@ -32,3 +32,9 @@ class RegisterUserSerializer(serializers.ModelSerializer):
             first_name=validated_data.get('first_name', ''),
             last_name=validated_data.get('last_name', ''),
         )
+
+class UserAPNsTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['apns_token']
+        extra_kwargs = {'apns_token': {'required': True, 'allow_blank': False}}
