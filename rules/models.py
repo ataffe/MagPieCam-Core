@@ -15,6 +15,7 @@ class Rule(models.Model):
     rule_nickname = models.CharField(max_length=240)
     is_enabled = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    last_triggered = models.DateTimeField(null=True, blank=True)
 
 
     def __str__(self):

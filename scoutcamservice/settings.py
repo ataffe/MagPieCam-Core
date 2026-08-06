@@ -216,3 +216,17 @@ CELERY_TIMEZONE = TIME_ZONE
 # mid-image puts the message back instead of silently dropping it.
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# APNs
+APNS_KEY_ID=os.environ.get("APNS_KEY_ID", default="")
+APNS_PRIVATE_KEY_PATH=os.environ.get("APNS_PRIVATE_KEY_PATH", default="")
+APNS_TEAM_ID=os.environ.get("APNS_TEAM_ID", default="")
+APNS_JWT_STALE_TIME_SECONDS=int(os.environ.get("APNS_JWT_STALE_TIME_SECONDS", default=1800))
+APNS_CLIENT_RETRIES = int(os.environ.get("APNS_CLIENT_RETRIES", default=3))
+APNS_APP_BUNDLE_ID=os.environ.get("APNS_APP_BUNDLE_ID", default="")
+APNS_URL=os.environ.get("APNS_URL", default="")
+APNS_PRIORITY=int(os.environ.get("APNS_PRIORITY", default=10))
+
+
+# Notifications
+RULE_TRIGGER_COOLDOWN_MINUTES=int(os.environ.get("RULE_TRIGGER_COOLDOWN_MINUTES", default=2))

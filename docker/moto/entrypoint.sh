@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-moto_server -H 0.0.0.0 -p 5000 &
+python /app/run_server.py &
 MOTO_PID=$!
 
 python /app/init_resources.py

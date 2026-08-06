@@ -5,9 +5,9 @@ FROM python:3.12-slim
 RUN pip install --no-cache-dir "moto[server]==5.2.2" boto3
 
 WORKDIR /app
-COPY init_resources.py entrypoint.sh /app/
+COPY init_resources.py entrypoint.sh run_server.py /app/
 RUN chmod +x /app/entrypoint.sh
 
-EXPOSE 5000
+EXPOSE 5001
 
 ENTRYPOINT ["/app/entrypoint.sh"]

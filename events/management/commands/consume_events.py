@@ -52,5 +52,5 @@ class Command(BaseCommand):
                 message.public_camera_id,
                 message.receipt_handle,
             )
-            logger.debug('Dispatched %s/%s for camera %s',
+            logger.info('Dispatched %s/%s for camera %s',
                          message.bucket, message.key, message.public_camera_id)

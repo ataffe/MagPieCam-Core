@@ -1,10 +1,13 @@
 import uuid
+from unittest.mock import patch, MagicMock, mock_open
 
+from django.conf import settings
 from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from notifications import apns_client
 from notifications.models import Notification
 from rules.models import Rule
 from users.models import User
@@ -140,3 +143,127 @@ class NotificationTests(TestCase):
     def test_deleting_camera_cascades_to_notifications(self):
         self.camera.delete()
         self.assertFalse(Notification.objects.filter(pk=self.notification.pk).exists())
+
+
+class ApnsClientTests(TestCase):
+    def setUp(self):
+        apns_client.cache_storage.clear()
+        self.user = make_user('carol', 'carol@example.com', first_name='Carol', last_name='Lee')
+        self.user.apns_device_id = 'device-token-abc'
+        self.user.save()
+        self.camera = Camera.objects.create(owner=self.user, location='Backyard')
+        self.rule = Rule.objects.create(
+            owner=self.user, camera=self.camera,
+            rule='Notify on motion', rule_nickname='Motion alert',
+        )
+        self.notification = Notification.objects.create(camera=self.camera, rule=self.rule)
+        self.addCleanup(apns_client.cache_storage.clear)
+
+    def _mock_client(self, mock_client_cls, status_code=200, json_data=None, content=b'{}', headers=None):
+        response = MagicMock()
+        response.status_code = status_code
+        response.content = content
+        response.json.return_value = json_data or {}
+        response.headers = headers or {}
+        instance = mock_client_cls.return_value.__enter__.return_value
+        instance.post.return_value = response
+        return instance
+
+    # -- refresh_jwt --
+
+    @patch('notifications.apns_client.jwt.encode', return_value='header.payload.signature')
+    @patch('builtins.open', mock_open(read_data=b'FAKE-PRIVATE-KEY'))
+    def test_refresh_jwt_returns_raw_token_string(self, mock_encode):
+        # Regression test: refresh_jwt used to base64-encode the already-encoded
+        # JWT and return bytes, which rendered as "b'...'" garbage once embedded
+        # in the Authorization header f-string.
+        token = apns_client.refresh_jwt()
+        self.assertEqual(token, 'header.payload.signature')
+        self.assertIsInstance(token, str)
+
+    @patch('notifications.apns_client.jwt.encode', return_value='header.payload.signature')
+    @patch('builtins.open', mock_open(read_data=b'FAKE-PRIVATE-KEY'))
+    def test_refresh_jwt_is_cached_within_ttl(self, mock_encode):
+        apns_client.refresh_jwt()
+        apns_client.refresh_jwt()
+        self.assertEqual(mock_encode.call_count, 1)
+
+    @patch('builtins.open', mock_open(read_data=b''))
+    def test_refresh_jwt_raises_when_private_key_missing(self, *_):
+        with self.assertRaises(FileNotFoundError):
+            apns_client.refresh_jwt()
+
+    # -- send_notification --
+
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_send_notification_success(self, mock_refresh, mock_client_cls):
+        instance = self._mock_client(mock_client_cls, status_code=200)
+        result = apns_client.send_notification(self.notification)
+        self.assertTrue(result)
+        called_headers = instance.post.call_args.kwargs['headers']
+        self.assertEqual(called_headers['authorization'], 'bearer fake-jwt')
+        # apns-priority is cast to int in settings; httpx requires str/bytes header values.
+        self.assertIsInstance(called_headers['apns-priority'], str)
+        called_url = instance.post.call_args.args[0]
+        self.assertEqual(called_url, f'{settings.APNS_URL}/3/device/{self.user.apns_device_id}')
+
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_send_notification_does_not_touch_rule_last_triggered(self, mock_refresh, mock_client_cls):
+        # Cooldown bookkeeping now lives in events.processing.create_notifications,
+        # not in the APNs transport client.
+        self._mock_client(mock_client_cls, status_code=200)
+        apns_client.send_notification(self.notification)
+        self.rule.refresh_from_db()
+        self.assertIsNone(self.rule.last_triggered)
+
+    @patch('notifications.apns_client.httpx.Client')
+    def test_send_notification_without_device_id_returns_false_without_calling_apns(self, mock_client_cls):
+        self.user.apns_device_id = None
+        self.user.save()
+        result = apns_client.send_notification(self.notification)
+        self.assertFalse(result)
+        mock_client_cls.assert_not_called()
+
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', side_effect=FileNotFoundError('no key'))
+    def test_send_notification_returns_false_when_jwt_refresh_fails(self, mock_refresh, mock_client_cls):
+        result = apns_client.send_notification(self.notification)
+        self.assertFalse(result)
+        mock_client_cls.assert_not_called()
+
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_send_notification_returns_false_on_client_error_without_retry(self, mock_refresh, mock_client_cls):
+        instance = self._mock_client(mock_client_cls, status_code=400, json_data={'reason': 'BadDeviceToken'})
+        result = apns_client.send_notification(self.notification)
+        self.assertFalse(result)
+        self.assertEqual(instance.post.call_count, 1)
+
+    @patch('time.sleep', return_value=None)
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_send_notification_retries_on_500_then_succeeds(self, mock_refresh, mock_client_cls, mock_sleep):
+        fail_response = MagicMock(status_code=500, content=b'')
+        ok_response = MagicMock(status_code=200, content=b'')
+        instance = mock_client_cls.return_value.__enter__.return_value
+        instance.post.side_effect = [fail_response, ok_response]
+        result = apns_client.send_notification(self.notification)
+        self.assertTrue(result)
+        self.assertEqual(instance.post.call_count, 2)
+
+    @patch('time.sleep', return_value=None)
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_send_notification_gives_up_after_exhausting_retries(self, mock_refresh, mock_client_cls, mock_sleep):
+        # Regression test: the 500 -> APNServiceError used to be raised and caught
+        # within the same try/except, so it never reached tenacity and no retry
+        # ever happened. Confirms retries now actually occur and failure still
+        # surfaces as `False` rather than an unhandled exception.
+        fail_response = MagicMock(status_code=500, content=b'')
+        instance = mock_client_cls.return_value.__enter__.return_value
+        instance.post.return_value = fail_response
+        result = apns_client.send_notification(self.notification)
+        self.assertFalse(result)
+        self.assertEqual(instance.post.call_count, settings.APNS_CLIENT_RETRIES)

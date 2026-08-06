@@ -203,7 +203,6 @@ class PresignedImageUploadUrlView(APIView):
         # but django assigns the return value of authenticate to request.user
         camera = request.user
         public_camera_id = camera.public_camera_id
-        logger.info(f'Generating a presigned url for camera: {public_camera_id}')
         content_type = request.data.get('content_type', 'image/jpeg')
         if content_type not in ALLOWED_TYPES:
             return Response({'detail': 'Unsupported content type'}, status=status.HTTP_400_BAD_REQUEST)

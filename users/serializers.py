@@ -36,5 +36,5 @@ class RegisterUserSerializer(serializers.ModelSerializer):
 class UserAPNsTokenSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['apns_token']
-        extra_kwargs = {'apns_token': {'required': True, 'allow_blank': False}}
+        fields = ['apns_device_id']
+        extra_kwargs = {'apns_device_id': {'required': True, 'allow_blank': False}}

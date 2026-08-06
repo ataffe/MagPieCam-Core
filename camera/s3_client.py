@@ -27,7 +27,7 @@ def get_camera_preview_download_url(img_key):
         ExpiresIn=300,
     )
     if settings.ENVIRONMENT == 'dev':
-        url = url.replace('localhost', settings.DEV_IP)
+        url = url.replace('scout-moto', settings.DEV_IP)
     return url
 
 def get_upload_url(img_key: str, content_type: str, upload_type: str):
@@ -40,5 +40,5 @@ def get_upload_url(img_key: str, content_type: str, upload_type: str):
             ExpiresIn=300
         )
     if settings.ENVIRONMENT == 'dev':
-        url = url.replace('localhost', settings.DEV_IP)
+        url = url.replace('scout-moto', settings.DEV_IP)
     return url

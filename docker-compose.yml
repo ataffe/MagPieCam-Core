@@ -1,9 +1,10 @@
+name: ScoutCam-Backend
 services:
   scoutcam-postgres:
     image: postgres
     container_name: scoutcam-postgres
     env_file:
-      - .env-docker
+      - .env
     environment:
       POSTGRES_DB: ${DATABASE_NAME}
       POSTGRES_USER: ${DATABASE_USERNAME}
@@ -23,13 +24,15 @@ services:
   scoutcam-redis:
     image: redis
     container_name: scoutcam-redis
-    ports:
-      - "6379:6379"
+    env_file:
+      - .env
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
+    ports:
+      - "6379:6379"
     networks:
       - scoutcam-network
 
@@ -38,7 +41,7 @@ services:
     image: scoutcam-webservice:0.1.0
     container_name: scoutcam-web-service
     env_file:
-      - .env-docker
+      - .env
     tty: true
     stdin_open: true
     depends_on:
@@ -60,9 +63,9 @@ services:
         REQUIREMENTS: requirements/worker.txt
     image: scoutcam-webservice-worker:0.1.0
     container_name: scoutcam-celery-worker
-    command: celery -A scoutcamservice worker -l info
+    command: celery -A scoutcamservice worker -l ${CELERY_WORKER_LOG_LEVEL:-INFO}
     env_file:
-      - .env-docker
+      - .env
     tty: true
     stdin_open: true
     depends_on:
@@ -84,9 +87,9 @@ services:
         REQUIREMENTS: requirements/worker.txt
     image: scoutcam-webservice-worker:0.1.0
     container_name: scoutcam-celery-beat
-    command: celery -A scoutcamservice beat -l info
+    command: celery -A scoutcamservice beat -l ${CELERY_BEAT_LOG_LEVEL:-INFO}
     env_file:
-      - .env-docker
+      - .env
     tty: true
     stdin_open: true
     depends_on:
@@ -104,7 +107,7 @@ services:
     container_name: scoutcam-event-consumer
     command: python manage.py consume_events
     env_file:
-      - .env-docker
+      - .env
     depends_on:
       scoutcam-postgres:
         condition: service_healthy
@@ -123,13 +126,11 @@ services:
     image: scoutcam-moto:0.1.0
     container_name: scout-moto
     env_file:
-      - .env-docker
-    # Host-side 5000 is commonly taken by macOS's AirPlay Receiver; the
-    # container-internal port (used by the other services) is unaffected.
+      - .env
     ports:
-      - "5001:5000"
+      - "5001:5001" # These need to match for presigned urls in dev env.
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/moto-api/')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/moto-api/')"]
       interval: 5s
       timeout: 5s
       retries: 10
