@@ -211,3 +211,5 @@ __marimo__/
 .env*
 .claude
 raspberry_pi_test_device_id.txt
+
+crypto

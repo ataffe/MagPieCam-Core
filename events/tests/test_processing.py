@@ -1,7 +1,12 @@
+import threading
+from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
 
-from django.test import TestCase
+from django.conf import settings
+from django.db import connection
+from django.test import TestCase, TransactionTestCase
+from django.utils import timezone
 
 from camera.models import Camera
 from events import processing
@@ -70,6 +75,88 @@ class CreateNotificationsTests(TestCase):
 
         self.assertEqual(created, [])
         self.assertEqual(Notification.objects.count(), 0)
+
+    def test_creating_notification_sets_rule_last_triggered(self):
+        before = timezone.now()
+        create_notifications(self.camera_id, [str(self.rule.public_rule_id)])
+
+        self.rule.refresh_from_db()
+        self.assertIsNotNone(self.rule.last_triggered)
+        self.assertGreaterEqual(self.rule.last_triggered, before)
+
+    def test_rule_within_cooldown_is_skipped(self):
+        self.rule.last_triggered = timezone.now()
+        self.rule.save(update_fields=['last_triggered'])
+
+        created = create_notifications(self.camera_id, [str(self.rule.public_rule_id)])
+
+        self.assertEqual(created, [])
+        self.assertEqual(Notification.objects.count(), 0)
+
+    def test_rule_past_cooldown_creates_notification(self):
+        stale = timezone.now() - timedelta(minutes=settings.RULE_TRIGGER_COOLDOWN_MINUTES, seconds=1)
+        self.rule.last_triggered = stale
+        self.rule.save(update_fields=['last_triggered'])
+
+        created = create_notifications(self.camera_id, [str(self.rule.public_rule_id)])
+
+        self.assertEqual(len(created), 1)
+        self.rule.refresh_from_db()
+        self.assertGreater(self.rule.last_triggered, stale)
+
+    def test_only_rules_past_cooldown_are_notified_among_several_triggered(self):
+        cooling_rule = self.rule
+        cooling_rule.last_triggered = timezone.now()
+        cooling_rule.save(update_fields=['last_triggered'])
+
+        ready_rule = Rule.objects.create(
+            owner=self.user, camera=self.camera,
+            rule='a dog is present', rule_nickname='Dog Detection')
+
+        created = create_notifications(
+            self.camera_id,
+            [str(cooling_rule.public_rule_id), str(ready_rule.public_rule_id)])
+
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0].rule, ready_rule)
+
+
+class CreateNotificationsRaceConditionTests(TransactionTestCase):
+    """Uses TransactionTestCase (real, separately-committed transactions per
+    thread) rather than TestCase, since the regular TestCase wraps a whole
+    test in one outer transaction and can't exercise real row locking.
+    """
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='alice', email='alice@example.com',
+            password='StrongPass123!', first_name='Alice', last_name='Smith')
+        self.camera = Camera.objects.create(owner=self.user, location='Front Door')
+        self.rule = Rule.objects.create(
+            owner=self.user, camera=self.camera,
+            rule='a person is present', rule_nickname='Person Detection')
+        self.camera_id = str(self.camera.public_camera_id)
+
+    def test_concurrent_triggers_of_the_same_rule_create_one_notification(self):
+        barrier = threading.Barrier(2)
+        results = []
+
+        def worker():
+            barrier.wait()
+            try:
+                created = create_notifications(self.camera_id, [str(self.rule.public_rule_id)])
+                results.append(len(created))
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(sorted(results), [0, 1])
+        self.assertEqual(Notification.objects.filter(rule=self.rule).count(), 1)
 
 
 class ProcessCameraImageTests(TestCase):
