@@ -1,0 +1,1217 @@
+openapi: 3.0.3
+info:
+  title: ScoutCam API
+  version: 1.0.0
+  description: A backend system for a smart camera.
+paths:
+  /v1/auth/register/:
+    post:
+      operationId: v1_auth_register_create
+      description: Create a new user account and return JWT access/refresh tokens
+        for it.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterUser'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RegisterUser'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RegisterUser'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterUser'
+          description: ''
+  /v1/auth/token/:
+    post:
+      operationId: v1_auth_token_create
+      description: |-
+        Takes a set of user credentials and returns an access and refresh JSON web
+        token pair to prove the authentication of those credentials.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenObtainPair'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenObtainPair'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenObtainPair'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenObtainPair'
+          description: ''
+  /v1/auth/token/refresh/:
+    post:
+      operationId: v1_auth_token_refresh_create
+      description: |-
+        Takes a refresh type JSON web token and returns an access type JSON web
+        token if the refresh token is valid.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefresh'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
+  /v1/cameras/:
+    get:
+      operationId: v1_cameras_list
+      description: List cameras owned by the authenticated user. Staff users may pass
+        `?all=true` to see every camera regardless of owner.
+      summary: List cameras
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Camera'
+          description: ''
+    post:
+      operationId: v1_cameras_create
+      description: Create a camera directly under the authenticated user, bypassing
+        the device provisioning/claim flow.
+      summary: Create a camera
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Camera'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Camera'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Camera'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Camera'
+          description: ''
+  /v1/cameras/{camera_public_camera_id}/notifications/:
+    get:
+      operationId: v1_cameras_notifications_list
+      description: List or retrieve notifications for a camera owned by the authenticated
+        user.
+      parameters:
+      - in: path
+        name: camera_public_camera_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Notification'
+          description: ''
+  /v1/cameras/{camera_public_camera_id}/notifications/{public_notification_id}/:
+    get:
+      operationId: v1_cameras_notifications_retrieve
+      description: List or retrieve notifications for a camera owned by the authenticated
+        user.
+      parameters:
+      - in: path
+        name: camera_public_camera_id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: public_notification_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+          description: ''
+  /v1/cameras/{camera_public_camera_id}/rules/:
+    get:
+      operationId: v1_cameras_rules_list
+      description: List detection rules for a camera owned by the authenticated user.
+      summary: List rules
+      parameters:
+      - in: path
+        name: camera_public_camera_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Rule'
+          description: ''
+    post:
+      operationId: v1_cameras_rules_create
+      description: Create a new detection rule for a camera owned by the authenticated
+        user.
+      summary: Create a rule
+      parameters:
+      - in: path
+        name: camera_public_camera_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Rule'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Rule'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Rule'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+          description: ''
+  /v1/cameras/{camera_public_camera_id}/rules/{public_rule_id}/:
+    get:
+      operationId: v1_cameras_rules_retrieve
+      description: Retrieve a single detection rule for a camera owned by the authenticated
+        user.
+      summary: Retrieve a rule
+      parameters:
+      - in: path
+        name: camera_public_camera_id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: public_rule_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+          description: ''
+    put:
+      operationId: v1_cameras_rules_update
+      description: Update a rule's writable fields (`rule`, `rule_nickname`, `is_enabled`,
+        `last_triggered`).
+      summary: Update a rule
+      parameters:
+      - in: path
+        name: camera_public_camera_id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: public_rule_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Rule'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Rule'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Rule'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+          description: ''
+    patch:
+      operationId: v1_cameras_rules_partial_update
+      description: Partially update a rule's writable fields (`rule`, `rule_nickname`,
+        `is_enabled`, `last_triggered`).
+      summary: Partially update a rule
+      parameters:
+      - in: path
+        name: camera_public_camera_id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: public_rule_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedRule'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedRule'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedRule'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Rule'
+          description: ''
+    delete:
+      operationId: v1_cameras_rules_destroy
+      description: Delete a detection rule for a camera owned by the authenticated
+        user.
+      summary: Delete a rule
+      parameters:
+      - in: path
+        name: camera_public_camera_id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: public_rule_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /v1/cameras/{public_camera_id}/:
+    get:
+      operationId: v1_cameras_retrieve
+      description: Retrieve a single camera owned by the authenticated user.
+      summary: Retrieve a camera
+      parameters:
+      - in: path
+        name: public_camera_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Camera'
+          description: ''
+    put:
+      operationId: v1_cameras_update
+      description: Update a camera's writable fields (currently just `location`).
+      summary: Update a camera
+      parameters:
+      - in: path
+        name: public_camera_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Camera'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/Camera'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Camera'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Camera'
+          description: ''
+    patch:
+      operationId: v1_cameras_partial_update
+      description: Partially update a camera's writable fields (currently just `location`).
+      summary: Partially update a camera
+      parameters:
+      - in: path
+        name: public_camera_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedCamera'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedCamera'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedCamera'
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Camera'
+          description: ''
+    delete:
+      operationId: v1_cameras_destroy
+      description: Delete a camera owned by the authenticated user.
+      summary: Delete a camera
+      parameters:
+      - in: path
+        name: public_camera_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /v1/cameras/{public_camera_id}/streaming/start/:
+    post:
+      operationId: v1_cameras_streaming_start_create
+      description: Publish a "start" command to the camera's streaming channel, signalling
+        it to begin publishing to MediaMTX.
+      parameters:
+      - in: path
+        name: public_camera_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          description: No response body
+        '401':
+          description: No response body
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /v1/cameras/auth/token/:
+    post:
+      operationId: v1_cameras_auth_token_create
+      description: Exchange a device token for a short-lived JWT access token scoped
+        to this camera.
+      tags:
+      - v1
+      security:
+      - cameraDeviceAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraTokenExchangeResponse'
+          description: ''
+  /v1/cameras/claim/:
+    post:
+      operationId: v1_cameras_claim_create
+      description: Claim a provisioned camera on behalf of the authenticated user
+        using its claim token, making them the owner.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimCamera'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClaimCamera'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClaimCamera'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicCameraIdResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /v1/cameras/mediamtx/auth/:
+    post:
+      operationId: v1_cameras_mediamtx_auth_create
+      description: Authorize a MediaMTX publish or read request for a camera's live
+        stream (called by MediaMTX as an auth webhook).
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MediaMtxAuth'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '200':
+          description: No response body
+        '401':
+          description: No response body
+        '403':
+          description: No response body
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /v1/cameras/presigned_upload_url/:
+    post:
+      operationId: v1_cameras_presigned_upload_url_create
+      description: Issue a presigned S3 URL a camera device can upload a detection
+        or preview image to.
+      parameters:
+      - in: query
+        name: upload_type
+        schema:
+          type: string
+          enum:
+          - CAMERA_PREVIEW
+          - DETECTION
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresignedUploadUrlRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PresignedUploadUrlRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PresignedUploadUrlRequest'
+      security:
+      - cameraJwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresignedUploadUrlResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /v1/cameras/provision/:
+    post:
+      operationId: v1_cameras_provision_create
+      description: Register a new camera by device_id and issue a claim token for
+        the owning user to later claim it with.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProvisionCamera'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimTokenResponse'
+          description: ''
+        '409':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /v1/cameras/register/:
+    post:
+      operationId: v1_cameras_register_create
+      description: Validate a camera's claim token and issue a permanent device token
+        used for CameraTokenAuthentication.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CameraRegistration'
+        required: true
+      security:
+      - jwtAuth: []
+      - {}
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceTokenResponse'
+          description: ''
+        '400':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+        '404':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DetailResponse'
+          description: ''
+  /v1/cameras/update_preview_time/:
+    post:
+      operationId: v1_cameras_update_preview_time_create
+      description: Record that the camera's preview image was just refreshed, used
+        to track preview freshness.
+      tags:
+      - v1
+      security:
+      - cameraJwtAuth: []
+      responses:
+        '200':
+          description: No response body
+  /v1/users/:
+    get:
+      operationId: v1_users_list
+      description: List registered users.
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+          description: ''
+  /v1/users/{public_user_id}/:
+    get:
+      operationId: v1_users_retrieve
+      description: Retrieve or delete the authenticated user's own account.
+      parameters:
+      - in: path
+        name: public_user_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: ''
+    delete:
+      operationId: v1_users_destroy
+      description: Retrieve or delete the authenticated user's own account.
+      parameters:
+      - in: path
+        name: public_user_id
+        schema:
+          type: string
+          format: uuid
+        required: true
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      responses:
+        '204':
+          description: No response body
+  /v1/users/apns_token/:
+    post:
+      operationId: v1_users_apns_token_create
+      description: Register or update the authenticated user's APNs device token for
+        push notifications.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserAPNsToken'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+          description: ''
+components:
+  schemas:
+    Camera:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        public_camera_id:
+          type: string
+          format: uuid
+          readOnly: true
+        owner:
+          type: string
+          readOnly: true
+        camera_preview_url:
+          type: string
+          readOnly: true
+        location:
+          type: string
+          maxLength: 100
+        device_id:
+          type: string
+          readOnly: true
+          nullable: true
+        device_token_hash:
+          type: string
+          readOnly: true
+        claim_token_hash:
+          type: string
+          readOnly: true
+        claimed:
+          type: boolean
+          readOnly: true
+        revoked:
+          type: boolean
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        claimed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        preview_updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+      required:
+      - camera_preview_url
+      - claim_token_hash
+      - claimed
+      - claimed_at
+      - created_at
+      - device_id
+      - device_token_hash
+      - id
+      - location
+      - owner
+      - preview_updated_at
+      - public_camera_id
+      - revoked
+      - updated_at
+    CameraRegistration:
+      type: object
+      properties:
+        device_id:
+          type: string
+          maxLength: 16
+          minLength: 16
+        claim_token:
+          type: string
+          maxLength: 128
+      required:
+      - claim_token
+      - device_id
+    CameraTokenExchangeResponse:
+      type: object
+      properties:
+        access:
+          type: string
+      required:
+      - access
+    ClaimCamera:
+      type: object
+      properties:
+        claim_token:
+          type: string
+          maxLength: 128
+        location:
+          type: string
+          maxLength: 50
+      required:
+      - claim_token
+      - location
+    ClaimTokenResponse:
+      type: object
+      properties:
+        claim_token:
+          type: string
+      required:
+      - claim_token
+    DetailResponse:
+      type: object
+      description: 'Shape of the ad hoc {''detail'': ''...''} error responses used
+        across this app.'
+      properties:
+        detail:
+          type: string
+      required:
+      - detail
+    DeviceTokenResponse:
+      type: object
+      properties:
+        device_token:
+          type: string
+        public_camera_id:
+          type: string
+          format: uuid
+      required:
+      - device_token
+      - public_camera_id
+    MediaMtxAuth:
+      type: object
+      properties:
+        user:
+          type: string
+        token:
+          type: string
+        action:
+          type: string
+        path:
+          type: string
+      required:
+      - action
+      - path
+      - token
+      - user
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+      - message
+    Notification:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        public_notification_id:
+          type: string
+          format: uuid
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        camera:
+          type: integer
+        rule:
+          type: integer
+          nullable: true
+      required:
+      - camera
+      - created_at
+      - id
+      - public_notification_id
+    PatchedCamera:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        public_camera_id:
+          type: string
+          format: uuid
+          readOnly: true
+        owner:
+          type: string
+          readOnly: true
+        camera_preview_url:
+          type: string
+          readOnly: true
+        location:
+          type: string
+          maxLength: 100
+        device_id:
+          type: string
+          readOnly: true
+          nullable: true
+        device_token_hash:
+          type: string
+          readOnly: true
+        claim_token_hash:
+          type: string
+          readOnly: true
+        claimed:
+          type: boolean
+          readOnly: true
+        revoked:
+          type: boolean
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        claimed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        preview_updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+    PatchedRule:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        public_rule_id:
+          type: string
+          format: uuid
+          readOnly: true
+        rule:
+          type: string
+          maxLength: 240
+        rule_nickname:
+          type: string
+          maxLength: 240
+        is_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        last_triggered:
+          type: string
+          format: date-time
+          nullable: true
+        owner:
+          type: integer
+          readOnly: true
+        camera:
+          type: integer
+          readOnly: true
+    PresignedUploadUrlRequest:
+      type: object
+      properties:
+        content_type:
+          type: string
+          default: image/jpeg
+    PresignedUploadUrlResponse:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        key:
+          type: string
+        expires_in:
+          type: integer
+      required:
+      - expires_in
+      - key
+      - url
+    ProvisionCamera:
+      type: object
+      properties:
+        device_id:
+          type: string
+          maxLength: 16
+          minLength: 16
+      required:
+      - device_id
+    PublicCameraIdResponse:
+      type: object
+      properties:
+        public_camera_id:
+          type: string
+          format: uuid
+      required:
+      - public_camera_id
+    RegisterUser:
+      type: object
+      properties:
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        password:
+          type: string
+          writeOnly: true
+      required:
+      - email
+      - password
+    Rule:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        public_rule_id:
+          type: string
+          format: uuid
+          readOnly: true
+        rule:
+          type: string
+          maxLength: 240
+        rule_nickname:
+          type: string
+          maxLength: 240
+        is_enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        last_triggered:
+          type: string
+          format: date-time
+          nullable: true
+        owner:
+          type: integer
+          readOnly: true
+        camera:
+          type: integer
+          readOnly: true
+      required:
+      - camera
+      - created_at
+      - id
+      - owner
+      - public_rule_id
+      - rule
+      - rule_nickname
+    TokenObtainPair:
+      type: object
+      properties:
+        email:
+          type: string
+          writeOnly: true
+        password:
+          type: string
+          writeOnly: true
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+          readOnly: true
+      required:
+      - access
+      - email
+      - password
+      - refresh
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+          writeOnly: true
+      required:
+      - access
+      - refresh
+    User:
+      type: object
+      properties:
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          maxLength: 255
+        public_user_id:
+          type: string
+          format: uuid
+          readOnly: true
+      required:
+      - email
+      - public_user_id
+    UserAPNsToken:
+      type: object
+      properties:
+        apns_device_id:
+          type: string
+          nullable: true
+          maxLength: 255
+      required:
+      - apns_device_id
+  securitySchemes:
+    cameraDeviceAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Token-based authentication with required prefix "Device"
+    cameraJwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

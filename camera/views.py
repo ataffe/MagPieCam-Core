@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.conf import settings
 from django.http import JsonResponse
 from asgiref.sync import async_to_sync
+from drf_spectacular.utils import extend_schema, extend_schema_view, OpenApiParameter, OpenApiTypes
 
 from camera.models import Camera
 from camera.serializers import (
@@ -24,7 +25,14 @@ from camera.serializers import (
     CameraRegistrationSerializer,
     ProvisionCameraSerializer,
     ClaimCameraSerializer,
-    MediaMtxAuthSerializer)
+    MediaMtxAuthSerializer,
+    DetailResponseSerializer,
+    PresignedUploadUrlRequestSerializer,
+    PresignedUploadUrlResponseSerializer,
+    CameraTokenExchangeResponseSerializer,
+    ClaimTokenResponseSerializer,
+    DeviceTokenResponseSerializer,
+    PublicCameraIdResponseSerializer)
 from camera.authentication import CameraTokenAuthentication, CameraJWTAuthentication, authenticate_jwt_async
 from camera.s3_client import get_upload_url
 from camera.constants import UploadType
@@ -37,7 +45,12 @@ class CameraTokenExchangeView(APIView):
     authentication_classes = [CameraTokenAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={200: CameraTokenExchangeResponseSerializer},
+    )
     def post(self, request):
+        """Exchange a device token for a short-lived JWT access token scoped to this camera."""
         camera = request.user
         token = AccessToken()
         token['public_camera_id'] = str(camera.public_camera_id)
@@ -52,7 +65,17 @@ class MediaMtxAuthView(APIView):
     permission_classes = [permissions.AllowAny]
     parser_classes = [JSONParser]
 
+    @extend_schema(
+        request=MediaMtxAuthSerializer,
+        responses={
+            200: None,
+            401: None,
+            403: None,
+            404: DetailResponseSerializer,
+        },
+    )
     def post(self, request):
+        """Authorize a MediaMTX publish or read request for a camera's live stream (called by MediaMTX as an auth webhook)."""
         serializer = MediaMtxAuthSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         action = serializer.validated_data['action']
@@ -86,6 +109,34 @@ class MediaMtxAuthView(APIView):
         logger.info(f"mediamtx auth ok: action={action} camera={public_camera_id}")
         return Response(status=status.HTTP_200_OK)
 
+@extend_schema_view(
+    list=extend_schema(
+        summary='List cameras',
+        description='List cameras owned by the authenticated user. '
+                    'Staff users may pass `?all=true` to see every camera regardless of owner.',
+    ),
+    retrieve=extend_schema(
+        summary='Retrieve a camera',
+        description='Retrieve a single camera owned by the authenticated user.',
+    ),
+    create=extend_schema(
+        summary='Create a camera',
+        description='Create a camera directly under the authenticated user, bypassing the '
+                    'device provisioning/claim flow.',
+    ),
+    update=extend_schema(
+        summary='Update a camera',
+        description="Update a camera's writable fields (currently just `location`).",
+    ),
+    partial_update=extend_schema(
+        summary='Partially update a camera',
+        description="Partially update a camera's writable fields (currently just `location`).",
+    ),
+    destroy=extend_schema(
+        summary='Delete a camera',
+        description='Delete a camera owned by the authenticated user.',
+    ),
+)
 class CameraViewSet(viewsets.ModelViewSet):
     serializer_class = CameraSerializer
     lookup_field = 'public_camera_id'
@@ -108,7 +159,15 @@ class ProvisionCameraView(APIView):
     permission_classes = [permissions.AllowAny]
     parser_classes = [JSONParser]
 
+    @extend_schema(
+        request=ProvisionCameraSerializer,
+        responses={
+            201: ClaimTokenResponseSerializer,
+            409: DetailResponseSerializer,
+        },
+    )
     def post(self, request):
+        """Register a new camera by device_id and issue a claim token for the owning user to later claim it with."""
         serializer = ProvisionCameraSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         device_id = serializer.validated_data['device_id']
@@ -133,7 +192,16 @@ class CameraRegistrationView(APIView):
     permission_classes = [permissions.AllowAny]
     parser_classes = [JSONParser]
 
+    @extend_schema(
+        request=CameraRegistrationSerializer,
+        responses={
+            201: DeviceTokenResponseSerializer,
+            400: DetailResponseSerializer,
+            404: DetailResponseSerializer,
+        },
+    )
     def post(self, request):
+        """Validate a camera's claim token and issue a permanent device token used for CameraTokenAuthentication."""
         serializer = CameraRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -165,7 +233,16 @@ class CameraRegistrationView(APIView):
 class CameraClaimView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=ClaimCameraSerializer,
+        responses={
+            200: PublicCameraIdResponseSerializer,
+            400: DetailResponseSerializer,
+            404: DetailResponseSerializer,
+        },
+    )
     def post(self, request):
+        """Claim a provisioned camera on behalf of the authenticated user using its claim token, making them the owner."""
         serializer = ClaimCameraSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         claim_token = serializer.validated_data['claim_token']
@@ -198,7 +275,24 @@ class PresignedImageUploadUrlView(APIView):
     authentication_classes = [CameraJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=PresignedUploadUrlRequestSerializer,
+        parameters=[
+            OpenApiParameter(
+                name='upload_type',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                enum=[UploadType.DETECTION, UploadType.CAMERA_PREVIEW],
+                required=True,
+            ),
+        ],
+        responses={
+            200: PresignedUploadUrlResponseSerializer,
+            400: DetailResponseSerializer,
+        },
+    )
     def post(self, request):
+        """Issue a presigned S3 URL a camera device can upload a detection or preview image to."""
         # User is really a Camera because CameraJWTAuthentication returns a camera instead of a user.
         # but django assigns the return value of authenticate to request.user
         camera = request.user
@@ -224,7 +318,9 @@ class CameraPreviewTimeView(APIView):
     authentication_classes = [CameraJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=None, responses={200: None})
     def post(self, request):
+        """Record that the camera's preview image was just refreshed, used to track preview freshness."""
         camera = request.user
         camera.preview_updated_at = timezone.now()
         camera.save()
@@ -234,7 +330,16 @@ class CameraPreviewTimeView(APIView):
 class StartStreamingView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(
+        request=None,
+        responses={
+            200: None,
+            401: None,
+            404: DetailResponseSerializer,
+        },
+    )
     def post(self, request, public_camera_id):
+        """Publish a "start" command to the camera's streaming channel, signalling it to begin publishing to MediaMTX."""
         try:
             camera = Camera.objects.get(public_camera_id=public_camera_id)
         except Camera.DoesNotExist:
@@ -247,6 +352,7 @@ class StartStreamingView(APIView):
 
 
 async def streaming_command_view(request):
+    """Long-poll for a streaming command (start/stop) published to the authenticated camera's Redis channel."""
     public_camera_id = await authenticate_jwt_async(request)
     if not public_camera_id:
         return JsonResponse({"message": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)

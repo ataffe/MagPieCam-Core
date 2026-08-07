@@ -7,6 +7,7 @@ from notifications.serializers import NotificationSerializer
 from camera.models import Camera
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
+    """List or retrieve notifications for a camera owned by the authenticated user."""
     serializer_class = NotificationSerializer
     permission_classes = [IsAuthenticated]
     lookup_field = "public_notification_id"
@@ -14,7 +15,7 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         camera = get_object_or_404(
             Camera,
-            public_camera_id=self.kwargs["public_camera_id_public_camera_id"],
+            public_camera_id=self.kwargs["camera_public_camera_id"],
             owner=self.request.user,
         )
         return (

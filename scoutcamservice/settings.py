@@ -27,7 +27,6 @@ DEBUG = bool(os.environ.get("DEBUG", default=0))
 
 ALLOWED_HOSTS = []
 
-
 # Application definition
 
 INSTALLED_APPS = [
@@ -45,6 +44,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'drf_spectacular'
 ]
 
 MIDDLEWARE = [
@@ -105,19 +105,26 @@ DATABASES = {
 }
 
 REST_FRAMEWORK = {
-    'DEFAULT_VERSIONING_CLASS': 'rest_framework.versioning.NamespaceVersioning',
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'ScoutCam API',
+    'DESCRIPTION': 'A backend system for a smart camera.',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+    # OTHER SETTINGS
 }
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -137,7 +144,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 # Internationalization
 # https://docs.djangoproject.com/en/6.0/topics/i18n/
 
@@ -148,7 +154,6 @@ TIME_ZONE = 'America/Los_Angeles'
 USE_I18N = True
 
 USE_TZ = True
-
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
@@ -218,15 +223,14 @@ CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 
 # APNs
-APNS_KEY_ID=os.environ.get("APNS_KEY_ID", default="")
-APNS_PRIVATE_KEY_PATH=os.environ.get("APNS_PRIVATE_KEY_PATH", default="")
-APNS_TEAM_ID=os.environ.get("APNS_TEAM_ID", default="")
-APNS_JWT_STALE_TIME_SECONDS=int(os.environ.get("APNS_JWT_STALE_TIME_SECONDS", default=1800))
+APNS_KEY_ID = os.environ.get("APNS_KEY_ID", default="")
+APNS_PRIVATE_KEY_PATH = os.environ.get("APNS_PRIVATE_KEY_PATH", default="")
+APNS_TEAM_ID = os.environ.get("APNS_TEAM_ID", default="")
+APNS_JWT_STALE_TIME_SECONDS = int(os.environ.get("APNS_JWT_STALE_TIME_SECONDS", default=1800))
 APNS_CLIENT_RETRIES = int(os.environ.get("APNS_CLIENT_RETRIES", default=3))
-APNS_APP_BUNDLE_ID=os.environ.get("APNS_APP_BUNDLE_ID", default="")
-APNS_URL=os.environ.get("APNS_URL", default="")
-APNS_PRIORITY=int(os.environ.get("APNS_PRIORITY", default=10))
-
+APNS_APP_BUNDLE_ID = os.environ.get("APNS_APP_BUNDLE_ID", default="")
+APNS_URL = os.environ.get("APNS_URL", default="")
+APNS_PRIORITY = int(os.environ.get("APNS_PRIORITY", default=10))
 
 # Notifications
-RULE_TRIGGER_COOLDOWN_MINUTES=int(os.environ.get("RULE_TRIGGER_COOLDOWN_MINUTES", default=2))
+RULE_TRIGGER_COOLDOWN_MINUTES = int(os.environ.get("RULE_TRIGGER_COOLDOWN_MINUTES", default=2))

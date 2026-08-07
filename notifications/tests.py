@@ -50,14 +50,14 @@ class NotificationTests(TestCase):
     def _notifications_list_url(self, camera=None):
         camera = camera or self.camera
         return reverse('notifications:camera-notifications-list', kwargs={
-            'public_camera_id_public_camera_id': camera.public_camera_id,
+            'camera_public_camera_id': camera.public_camera_id,
         })
 
     def _notification_detail_url(self, public_notification_id=None, camera=None):
         public_notification_id = public_notification_id or self.notification.public_notification_id
         camera = camera or self.camera
         return reverse('notifications:camera-notifications-detail', kwargs={
-            'public_camera_id_public_camera_id': camera.public_camera_id,
+            'camera_public_camera_id': camera.public_camera_id,
             'public_notification_id': public_notification_id,
         })
 
