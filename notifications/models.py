@@ -7,9 +7,9 @@ from rules.models import Rule
 class Notification(models.Model):
     class Meta:
         indexes = [
-            models.Index(fields=["camera", "-created_at"]),
+            models.Index(fields=["camera", "-public_notification_id"]),
         ]
-        ordering = ["-created_at"]
+        ordering = ["-public_notification_id"]
     id = models.BigAutoField(primary_key=True)
     public_notification_id = models.UUIDField(
         editable=False,

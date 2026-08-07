@@ -8,7 +8,7 @@ class CameraSerializer(serializers.ModelSerializer):
     owner = serializers.StringRelatedField(read_only=True)
     camera_preview_url = serializers.SerializerMethodField()
 
-    def get_camera_preview_url(self, camera):
+    def get_camera_preview_url(self, camera: Camera) -> str:
         # Don't generate a presigned URL for a key that was never uploaded.
         if not camera.preview_updated_at:
             return None
@@ -58,3 +58,28 @@ class MediaMtxAuthSerializer(serializers.Serializer):
     token = serializers.CharField(allow_blank=True, trim_whitespace=True)
     action = serializers.CharField(allow_blank=True, trim_whitespace=True)
     path = serializers.CharField(allow_blank=True, trim_whitespace=True)
+
+class DetailResponseSerializer(serializers.Serializer):
+    """Shape of the ad hoc {'detail': '...'} error responses used across this app."""
+    detail = serializers.CharField()
+
+class PresignedUploadUrlRequestSerializer(serializers.Serializer):
+    content_type = serializers.CharField(default='image/jpeg')
+
+class PresignedUploadUrlResponseSerializer(serializers.Serializer):
+    url = serializers.URLField()
+    key = serializers.CharField()
+    expires_in = serializers.IntegerField()
+
+class CameraTokenExchangeResponseSerializer(serializers.Serializer):
+    access = serializers.CharField()
+
+class ClaimTokenResponseSerializer(serializers.Serializer):
+    claim_token = serializers.CharField()
+
+class DeviceTokenResponseSerializer(serializers.Serializer):
+    device_token = serializers.CharField()
+    public_camera_id = serializers.UUIDField()
+
+class PublicCameraIdResponseSerializer(serializers.Serializer):
+    public_camera_id = serializers.UUIDField()

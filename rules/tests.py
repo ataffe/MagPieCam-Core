@@ -41,14 +41,14 @@ class RuleTests(TestCase):
     def _rules_list_url(self, camera=None):
         camera = camera or self.camera
         return reverse('rules:camera-rules-list', kwargs={
-            'public_camera_id_public_camera_id': camera.public_camera_id,
+            'camera_public_camera_id': camera.public_camera_id,
         })
 
     def _rule_detail_url(self, rule=None, camera=None):
         rule = rule or self.rule
         camera = camera or self.camera
         return reverse('rules:camera-rules-detail', kwargs={
-            'public_camera_id_public_camera_id': camera.public_camera_id,
+            'camera_public_camera_id': camera.public_camera_id,
             'public_rule_id': rule.public_rule_id,
         })
 

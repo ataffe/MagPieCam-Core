@@ -38,3 +38,6 @@ class UserAPNsTokenSerializer(serializers.ModelSerializer):
         model = User
         fields = ['apns_device_id']
         extra_kwargs = {'apns_device_id': {'required': True, 'allow_blank': False}}
+
+class MessageResponseSerializer(serializers.Serializer):
+    message = serializers.CharField()
