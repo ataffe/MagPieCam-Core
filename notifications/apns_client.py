@@ -93,7 +93,7 @@ def send_notification(notification: Notification) -> bool:
         'aps': {
             "alert": {
                 "title": f"ScoutCam Rule Triggered!",
-                "body": f"{rule.rule} has been seen in the {camera.location}"
+                "body": f"{rule.rule} has been seen in the {camera.location}".capitalize()
             }
         }
     }

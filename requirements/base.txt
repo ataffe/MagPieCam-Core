@@ -1,6 +1,6 @@
 # Everything needed to boot the Django project: the web service installs only
 # this. Deliberately excludes the event-processing deps (Pillow, google-genai)
-# so the web image doesn't carry weight it never uses -- see worker.txt.
+# so the web image doesn't carry weight it never uses -- see api.txt.
 Django==6.0.4
 djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
@@ -17,3 +17,4 @@ pyjwt[crypto]==2.12.1
 tenacity==9.1.4
 cachetools==6.2.6
 drf-spectacular==0.30.0
+whitenoise==6.12.0

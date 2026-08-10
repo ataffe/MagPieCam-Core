@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from events.ml.factory import build_rules_model
+from events.ml.model_factory import build_rules_model
 
 
 API_CONFIG = {'model_type': 'api', 'api_model_name': 'gemini-3.1-flash-lite'}

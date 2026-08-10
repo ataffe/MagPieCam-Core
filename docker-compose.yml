@@ -54,18 +54,31 @@ services:
     networks:
       - scoutcam-network
 
-  # The worker runs both camera.tasks (stream sweeping) and events.tasks (image
-  # evaluation), so it needs requirements/worker.txt
-  scoutcam-celery-worker:
+  # Image evaluation worker (events.tasks) only.
+  # Use only 1 worker because each worker has a copy of the rules model
+  # If more workers are needed scale the docker container.
+  scoutcam-celery-worker-ml:
     build:
       context: .
       args:
-        REQUIREMENTS: requirements/worker.txt
-    image: scoutcam-webservice-worker:0.1.0
-    container_name: scoutcam-celery-worker
-    command: celery -A scoutcamservice worker -l ${CELERY_WORKER_LOG_LEVEL:-INFO}
+        REQUIREMENTS: requirements/hosted.txt
+        # Triton JIT-compiles CUDA kernels at runtime, so the ML image needs a
+        # C compiler on board.
+        INSTALL_ML_BUILD_TOOLS: "1"
+    image: scoutcam-webservice-worker-ml:0.1.0
+    container_name: scoutcam-celery-worker-ml
+    command: celery -A scoutcamservice worker -Q events --concurrency=1 -l ${CELERY_WORKER_LOG_LEVEL:-INFO}
+    environment:
+      PRELOAD_RULES_MODEL: "1"
     env_file:
       - .env
+    # Expose the host NVIDIA GPU for model inference. Requires the NVIDIA
+    # Container Toolkit on the host (nvidia-ctk runtime configure --runtime=docker).
+    gpus: all
+    # Persist the multi-GB weights across restarts so init() skips the Backblaze
+    # download when the dir is already populated.
+    volumes:
+      - scoutcam-ml-weights:/app/ml_weights
     tty: true
     stdin_open: true
     depends_on:
@@ -78,14 +91,29 @@ services:
     networks:
       - scoutcam-network
 
+  # Stream sweeping worker (camera.tasks)
+  scoutcam-celery-worker-lite:
+    build:
+      context: .
+    image: scoutcam-webservice:0.1.0
+    container_name: scoutcam-celery-worker-lite
+    command: celery -A scoutcamservice worker -Q camera --concurrency=2 -l ${CELERY_WORKER_LOG_LEVEL:-INFO}
+    env_file:
+      - .env
+    tty: true
+    stdin_open: true
+    depends_on:
+      scoutcam-redis:
+        condition: service_healthy
+    networks:
+      - scoutcam-network
+
   # Beat only schedules; it shares the worker image so there's one build to keep
   # in sync rather than three.
   scoutcam-celery-beat:
     build:
       context: .
-      args:
-        REQUIREMENTS: requirements/worker.txt
-    image: scoutcam-webservice-worker:0.1.0
+    image: scoutcam-webservice:0.1.0
     container_name: scoutcam-celery-beat
     command: celery -A scoutcamservice beat -l ${CELERY_BEAT_LOG_LEVEL:-INFO}
     env_file:
@@ -101,9 +129,7 @@ services:
   scoutcam-event-consumer:
     build:
       context: .
-      args:
-        REQUIREMENTS: requirements/worker.txt
-    image: scoutcam-webservice-worker:0.1.0
+    image: scoutcam-webservice:0.1.0
     container_name: scoutcam-event-consumer
     command: python manage.py consume_events
     env_file:
@@ -157,7 +183,7 @@ services:
 networks:
   scoutcam-network:
     name: scoutcam-network
-    external: true
 
 volumes:
   scoutcam-postgres-data:
+  scoutcam-ml-weights:

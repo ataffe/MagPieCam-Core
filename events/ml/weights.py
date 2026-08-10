@@ -1,9 +1,33 @@
 import boto3
 import os
+import shutil
 from pathlib import Path
 import logging
 
 logger = logging.getLogger("Weights Util")
+
+# Written only after every object has finished downloading. Its presence is the
+# signal that the weights dir is complete and safe to load -- an interrupted
+# download leaves files but no marker, so the next run knows to start over.
+_WEIGHTS_READY_MARKER = ".weights_ready"
+
+
+def weights_ready(download_dir: str) -> bool:
+    """True only if a previous download finished cleanly (marker present)."""
+    return (Path(download_dir) / _WEIGHTS_READY_MARKER).exists()
+
+
+def _clear_dir_contents(directory: Path) -> None:
+    """Empty a directory without removing the directory itself.
+
+    The weights dir is a mount point (named volume), so rmtree on it would fail
+    trying to unlink the mount -- clear its contents instead.
+    """
+    for child in directory.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
 
 
 def download_weights_backblaze(
@@ -23,15 +47,30 @@ def download_weights_backblaze(
     )
     download_dir = Path(download_dir)
     download_dir.mkdir(parents=True, exist_ok=True)
+    # We only get here when the weights aren't ready, so anything already in the
+    # dir is a stale partial download -- wipe it before starting clean.
+    _clear_dir_contents(download_dir)
+
     paginator = s3_client.get_paginator('list_objects_v2')
     prefix = f'{model_name}/{model_variant_name}/'
+    downloaded_any = False
     for page in paginator.paginate(Bucket=s3_bucket, Prefix=prefix):
         for obj in page.get('Contents', []):
             key = obj['Key']
-            filename = Path(key).name
-            logger.info(f'Downloading {filename}')
-            dest = f'{download_dir}/{filename}'
-            s3_client.download_file(s3_bucket, key, dest)
+            # Skip the prefix's own "directory" placeholder object, if any.
+            if key.endswith('/'):
+                continue
+            # Preserve any nested layout under the prefix rather than flattening.
+            rel = Path(key).relative_to(prefix)
+            dest = download_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(f'Downloading {rel}')
+            s3_client.download_file(s3_bucket, key, str(dest))
+            downloaded_any = True
 
-    if not any(download_dir.iterdir()):
-        raise FileNotFoundError(f'No files found in {download_dir}')
+    if not downloaded_any:
+        raise FileNotFoundError(
+            f'No objects found under s3://{s3_bucket}/{prefix}')
+
+    # Marker last: only now is the set known to be complete.
+    (download_dir / _WEIGHTS_READY_MARKER).touch()

@@ -6,6 +6,7 @@ from PIL import Image
 from events.ml.hosted.gemma4 import Gemma4RulesModel
 from events.ml.base import UserRulesEvalRequest
 from events.ml.base import RuleDTO
+from events.ml.weights import _WEIGHTS_READY_MARKER
 
 
 MODULE = 'events.ml.hosted.gemma4'
@@ -79,6 +80,7 @@ def test_constructor_leaves_model_and_processor_as_none():
 
 def test_init_skips_download_when_weights_are_present(tmp_path):
     (tmp_path / 'model.safetensors').touch()
+    (tmp_path / _WEIGHTS_READY_MARKER).touch()
     model = Gemma4RulesModel(
         model_variant='test-variant', model_weights_dir=str(tmp_path))
     with patch(f'{MODULE}.AutoModelForCausalLM'), \

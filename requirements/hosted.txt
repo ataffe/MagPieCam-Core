@@ -1,8 +1,8 @@
 # Runs the rules model locally instead of calling the Gemini API. Several GB of
 # weights and CUDA wheels, so for now it is NOT installed in a deployed image -- only
 # for local runs with ML_MODEL_TYPE=hosted.
--r worker.txt
-torch==2.11.0
+-r api.txt
+torch==2.13.0
 torchvision==0.28.0
 transformers==5.5.0
 accelerate==1.14.0

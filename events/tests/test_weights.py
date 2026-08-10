@@ -3,7 +3,11 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch
 
-from events.ml.weights import download_weights_backblaze
+from events.ml.weights import (
+    download_weights_backblaze,
+    weights_ready,
+    _WEIGHTS_READY_MARKER,
+)
 
 
 S3_ENV = {
@@ -115,3 +119,70 @@ def test_raises_file_not_found_when_no_pages_returned(tmp_path):
             .paginate.return_value = []
         with pytest.raises(FileNotFoundError):
             download_weights_backblaze('gemma4', 'test-variant', str(tmp_path))
+
+
+# --- Completion marker / partial-download recovery ---
+
+def _run_download(tmp_path, pages):
+    with patch.dict(os.environ, S3_ENV), \
+         patch('boto3.client') as mock_boto3:
+        mock_s3 = mock_boto3.return_value
+        mock_s3.get_paginator.return_value.paginate.return_value = pages
+        mock_s3.download_file.side_effect = _make_file_on_download
+        download_weights_backblaze('gemma4', 'test-variant', str(tmp_path))
+
+
+def test_weights_ready_is_false_without_marker(tmp_path):
+    (tmp_path / 'model.safetensors').touch()
+    assert weights_ready(str(tmp_path)) is False
+
+
+def test_writes_ready_marker_after_successful_download(tmp_path):
+    _run_download(tmp_path, ONE_FILE_PAGE)
+    assert (tmp_path / _WEIGHTS_READY_MARKER).exists()
+    assert weights_ready(str(tmp_path)) is True
+
+
+def test_no_marker_written_when_download_fails(tmp_path):
+    with patch.dict(os.environ, S3_ENV), \
+         patch('boto3.client') as mock_boto3:
+        mock_boto3.return_value.get_paginator.return_value \
+            .paginate.return_value = [{'Contents': []}]
+        with pytest.raises(FileNotFoundError):
+            download_weights_backblaze('gemma4', 'test-variant', str(tmp_path))
+    assert weights_ready(str(tmp_path)) is False
+
+
+def test_clears_stale_partial_download_before_downloading(tmp_path):
+    # A leftover file from an interrupted run (no marker present).
+    (tmp_path / 'leftover.bin').touch()
+    _run_download(tmp_path, ONE_FILE_PAGE)
+    assert not (tmp_path / 'leftover.bin').exists()
+    assert (tmp_path / 'model.safetensors').exists()
+
+
+def test_skips_directory_placeholder_key(tmp_path):
+    pages = [{'Contents': [
+        {'Key': 'gemma4/test-variant/'},
+        {'Key': 'gemma4/test-variant/model.safetensors'},
+    ]}]
+    with patch.dict(os.environ, S3_ENV), \
+         patch('boto3.client') as mock_boto3:
+        mock_s3 = mock_boto3.return_value
+        mock_s3.get_paginator.return_value.paginate.return_value = pages
+        mock_s3.download_file.side_effect = _make_file_on_download
+        download_weights_backblaze('gemma4', 'test-variant', str(tmp_path))
+    assert mock_s3.download_file.call_count == 1
+
+
+def test_preserves_nested_key_layout(tmp_path):
+    pages = [{'Contents': [
+        {'Key': 'gemma4/test-variant/subdir/nested.json'},
+    ]}]
+    with patch.dict(os.environ, S3_ENV), \
+         patch('boto3.client') as mock_boto3:
+        mock_s3 = mock_boto3.return_value
+        mock_s3.get_paginator.return_value.paginate.return_value = pages
+        mock_s3.download_file.side_effect = _make_file_on_download
+        download_weights_backblaze('gemma4', 'test-variant', str(tmp_path))
+    assert (tmp_path / 'subdir' / 'nested.json').exists()

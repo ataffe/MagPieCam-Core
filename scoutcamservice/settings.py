@@ -23,7 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'djangoinsecure-asoikdfjapoiwehfj2323894askjdf23')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = bool(os.environ.get("DEBUG", default=0))
+DEBUG = bool(os.environ.get("DEBUG", default=True))
 
 ALLOWED_HOSTS = []
 
@@ -55,7 +55,10 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware'
 ]
+
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 ROOT_URLCONF = 'scoutcamservice.urls'
 
@@ -159,6 +162,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 AUTH_USER_MODEL = 'users.User'
 
@@ -221,6 +225,14 @@ CELERY_TIMEZONE = TIME_ZONE
 # mid-image puts the message back instead of silently dropping it.
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+# Keep the heavy image-evaluation work off the worker that runs the frequent,
+# lightweight stream sweep. The ML worker consumes 'events' at concurrency=1 so
+# exactly one copy of the rules model is loaded; a separate lite worker consumes
+# 'camera' so a long evaluation never delays a sweep tick.
+CELERY_TASK_ROUTES = {
+    'events.tasks.*': {'queue': 'events'},
+    'camera.tasks.*': {'queue': 'camera'},
+}
 
 # APNs
 APNS_KEY_ID = os.environ.get("APNS_KEY_ID", default="")
