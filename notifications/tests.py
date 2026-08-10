@@ -94,7 +94,7 @@ class NotificationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data['public_notification_id'], str(self.notification.public_notification_id))
-        self.assertEqual(data['public_rule_id'], str(self.rule.public_rule_id))
+        self.assertEqual(data['rule_nickname'], self.rule.rule_nickname)
         self.assertEqual(data['public_camera_id'], str(self.camera.public_camera_id))
 
     def test_retrieve_notification_not_found(self):
@@ -140,6 +140,15 @@ class NotificationTests(TestCase):
         self.rule.delete()
         self.notification.refresh_from_db()
         self.assertIsNone(self.notification.rule)
+
+    def test_retrieve_notification_omits_rule_nickname_when_rule_was_deleted(self):
+        # rule_nickname has no `default`/`allow_null`, so DRF's dotted source
+        # (rule.rule_nickname) hits AttributeError on a None rule and skips the
+        # field entirely -- the key is missing from the response, not null.
+        self.rule.delete()
+        response = self.client.get(self._notification_detail_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('rule_nickname', response.json())
 
     def test_deleting_camera_cascades_to_notifications(self):
         self.camera.delete()
