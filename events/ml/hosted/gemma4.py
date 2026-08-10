@@ -1,7 +1,7 @@
 import torch
 from transformers import AutoProcessor, AutoModelForCausalLM
 import logging
-from pathlib import Path
+import time
 
 from typing import Optional
 from events.ml.base import UserRulesEvalRequest, RulesModel
@@ -13,7 +13,7 @@ from events.ml.prompt import (
     parse_rule_eval_result,
     triggered_rule_ids,
 )
-from events.ml.weights import download_weights_backblaze
+from events.ml.weights import download_weights_backblaze, weights_ready
 from events.ml.base import RuleDTO
 
 logger = logging.getLogger("[Gemma4 Rules Model]")
@@ -45,12 +45,13 @@ class Gemma4RulesModel(RulesModel):
 
     def init(self):
         model_path = self.weights_dir
-        if (not Path(model_path).exists()
-                or not any(Path(model_path).iterdir())):
+        # weights_ready() checks for the completion marker, so a prior run that
+        # died mid-download (files present, no marker) triggers a clean re-download
+        # instead of loading a truncated model.
+        if not weights_ready(model_path):
             download_weights_backblaze('gemma4', self.variant, self.weights_dir)
             logger.info(f"Model downloaded to {model_path}")
-        # model_path is a local directory populated by download_weights_backblaze
-        # above, never a Hub repo id, so there's no revision to pin.
+        warm_up_start = time.perf_counter()
         self.model = AutoModelForCausalLM.from_pretrained(  # nosec B615
             model_path,
             dtype=torch.bfloat16,
@@ -73,7 +74,7 @@ class Gemma4RulesModel(RulesModel):
         inputs = self.processor(
             text=text, return_tensors="pt").to(self.model.device)
         self.model.generate(**inputs, max_new_tokens=1024)
-        logger.info("Warm up complete")
+        logger.info(f"Warm up complete in {time.perf_counter() - warm_up_start:.2f} seconds.")
 
     @staticmethod
     def _build_rule_messages(rules: list[RuleDTO]) -> list[dict]:
@@ -125,6 +126,7 @@ class Gemma4RulesModel(RulesModel):
             return []
 
         try:
+            eval_start = time.perf_counter()
             rule_messages = self._build_rule_messages(rules)
             prompt_text = self.processor.apply_chat_template(
                 rule_messages,
@@ -138,9 +140,11 @@ class Gemma4RulesModel(RulesModel):
             eval_results = parse_rule_eval_result(raw, logger)
             if eval_results is None:
                 return []
-            return triggered_rule_ids(
+            triggered_rules = triggered_rule_ids(
                 eval_results, logger,
                 valid_ids={rule.public_rule_id for rule in rules})
+            logger.info(f"Evaluated rules in {time.perf_counter() - eval_start:.2f} seconds.")
+            return triggered_rules
         except Exception as e:
             logger.exception(f"Unexpected error evaluating rules: {e}")
             return []

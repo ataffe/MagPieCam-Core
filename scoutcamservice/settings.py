@@ -225,6 +225,14 @@ CELERY_TIMEZONE = TIME_ZONE
 # mid-image puts the message back instead of silently dropping it.
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+# Keep the heavy image-evaluation work off the worker that runs the frequent,
+# lightweight stream sweep. The ML worker consumes 'events' at concurrency=1 so
+# exactly one copy of the rules model is loaded; a separate lite worker consumes
+# 'camera' so a long evaluation never delays a sweep tick.
+CELERY_TASK_ROUTES = {
+    'events.tasks.*': {'queue': 'events'},
+    'camera.tasks.*': {'queue': 'camera'},
+}
 
 # APNs
 APNS_KEY_ID = os.environ.get("APNS_KEY_ID", default="")

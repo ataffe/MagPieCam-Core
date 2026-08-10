@@ -11,7 +11,7 @@ from django.utils import timezone
 
 from camera.models import Camera
 from events.ml.base import UserRulesEvalRequest
-from events.ml.factory import build_rules_model
+from events.ml.model_factory import build_rules_model
 from events.selectors import get_rule_dtos_by_camera_ids
 from notifications.models import Notification
 from rules.models import Rule

@@ -19,11 +19,11 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Tests and dev-only tooling — not needed at runtime
+# Tests and dev-only tooling — not needed at runtime.
+# requirements/hosted.txt is NOT excluded: the ML worker image builds from it.
 tools/
 pytest.ini
 requirements/dev.txt
-requirements/hosted.txt
 
 # Model weights are downloaded at runtime from object storage
 ml_weights
