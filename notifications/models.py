@@ -27,5 +27,6 @@ class Notification(models.Model):
         blank=True,
         related_name='notifications'
     )
+    rule_nickname = models.CharField(null=False, blank=False)
     created_at = models.DateTimeField(auto_now_add=True)
 

@@ -46,6 +46,14 @@ class CreateNotificationsTests(TestCase):
         self.assertEqual(notification.camera, self.camera)
         self.assertEqual(notification.rule, self.rule)
 
+    def test_notification_copies_rule_nickname_at_creation(self):
+        # Denormalized so it survives the rule being deleted later (SET_NULL
+        # only clears notification.rule, not this column).
+        create_notifications(self.camera_id, [str(self.rule.public_rule_id)])
+
+        notification = Notification.objects.get()
+        self.assertEqual(notification.rule_nickname, self.rule.rule_nickname)
+
     def test_no_triggered_rules_creates_nothing(self):
         self.assertEqual(create_notifications(self.camera_id, []), [])
         self.assertEqual(Notification.objects.count(), 0)

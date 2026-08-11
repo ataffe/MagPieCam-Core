@@ -68,7 +68,7 @@ def _post_notification(headers: dict, body: dict, url: str) -> httpx.Response:
     return response
 
 
-def send_notification(notification: Notification) -> bool:
+def send_notification(notification: Notification, preview_img_url: str) -> bool:
     try:
         access_token = refresh_jwt()
     except Exception as e:
@@ -90,14 +90,16 @@ def send_notification(notification: Notification) -> bool:
     rule = notification.rule
     camera = notification.camera
     body = {
-        'aps': {
+        "aps": {
+            "mutable-content": 1,
             "alert": {
                 "title": f"ScoutCam Rule Triggered!",
                 "body": f"{rule.rule} has been seen in the {camera.location}".capitalize()
             }
-        }
+        },
+        "detection-image-url": preview_img_url,
     }
-    url = f'{settings.APNS_URL}/3/device/{device_id}'
+    url = f"{settings.APNS_URL}/3/device/{device_id}"
 
     try:
         response = _post_notification(headers, body, url)
@@ -110,7 +112,7 @@ def send_notification(notification: Notification) -> bool:
         logger.error(f" Unable to send notification, status code: {response.status_code}, error: {error_response}")
         return False
 
-    apns_id = response.headers.get('apns-id', "")
+    apns_id = str(response.headers.get('apns-unique-id', "")).lower()
     if apns_id:
         logger.info(f" Successfully sent notification id: {apns_id}")
     else:

@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING
 from urllib.parse import unquote
 
 import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from django.conf import settings
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from events.interfaces import ImageQueueClient, ParsedMessage
 
@@ -26,10 +29,13 @@ def sqs_config_from_settings() -> dict:
         'region_name': settings.AWS_REGION,
         'aws_access_key_id': settings.AWS_ACCESS_KEY_ID,
         'aws_secret_access_key': settings.AWS_SECRET_ACCESS_KEY,
+        'aws_cert_file': settings.AWS_CERT_FILE_PATH,
         'sqs': {
             'queue_name': settings.SQS_QUEUE_NAME,
             'max_number_of_messages': settings.SQS_MAX_NUMBER_OF_MESSAGES,
             'wait_time_seconds': settings.SQS_WAIT_TIME_SECONDS,
+            'max_retry_attempts': settings.SQS_MAX_RETRY_ATTEMPTS,
+            'retry_mode': settings.SQS_RETRY_MODE,
         },
     }
 
@@ -75,6 +81,17 @@ class ParsedSQSMessage(ParsedMessage):
         return self.message
 
 
+@retry(
+    stop=stop_after_attempt(settings.SQS_QUEUE_LOOKUP_RETRIES),
+    wait=wait_exponential(multiplier=1, min=1, max=30),
+    retry=retry_if_exception_type(ClientError),
+    reraise=True)
+def _get_queue_by_name(sqs_resource, queue_name: str):
+    """Resolve the queue URL, retrying while it doesn't exist yet.
+    """
+    return sqs_resource.get_queue_by_name(QueueName=queue_name)
+
+
 class SQSImageQueueClient(ImageQueueClient):
     def __init__(self, config_dict=None):
         config_dict = config_dict or sqs_config_from_settings()
@@ -83,8 +100,15 @@ class SQSImageQueueClient(ImageQueueClient):
             endpoint_url=config_dict['endpoint_url'],
             region_name=config_dict['region_name'],
             aws_access_key_id=config_dict['aws_access_key_id'],
-            aws_secret_access_key=config_dict['aws_secret_access_key'])
-        self.queue = self.sqs_resource.get_queue_by_name(QueueName=config_dict['sqs']['queue_name'])
+            aws_secret_access_key=config_dict['aws_secret_access_key'],
+            verify=config_dict['aws_cert_file'],
+            config=Config(
+                retries={
+                'max_attempts': config_dict['sqs']['max_retry_attempts'],
+                'mode': config_dict['sqs']['retry_mode']
+            })
+        )
+        self.queue = _get_queue_by_name(self.sqs_resource, config_dict['sqs']['queue_name'])
         self.max_messages = config_dict['sqs']['max_number_of_messages']
         self.wait_time_seconds = config_dict['sqs']['wait_time_seconds']
 

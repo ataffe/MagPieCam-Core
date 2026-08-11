@@ -11,8 +11,13 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 MOTO_PORT = os.environ.get("MOTO_PORT")
-ENDPOINT_URL = f"http://localhost:{MOTO_PORT}"
+# Must match a hostname the cert actually covers (see docker/moto/certs) --
+# it's issued for "scout-moto" (the service/network alias), not "localhost".
+ENDPOINT_URL = f"https://scout-moto:{MOTO_PORT}"
 REGION = os.environ.get("AWS_REGION", "us-west-1")
+# run_server.py serves this same cert (see its -c/-k flags); referencing it
+# here rather than disabling verification also catches a broken cert file.
+CERT_FILE = "certs/cert.pem"
 
 DETECTION_BUCKET = os.environ.get("AWS_IMG_DETECTION_BUCKET")
 PREVIEW_BUCKET = os.environ.get("AWS_IMG_PREVIEW_BUCKET")
@@ -20,7 +25,8 @@ QUEUE_NAME = os.environ.get("SQS_QUEUE_NAME")
 
 
 def wait_for_moto(timeout_seconds=40):
-    client = boto3.client("s3", endpoint_url=ENDPOINT_URL, region_name=REGION)
+    client = boto3.client(
+        "s3", endpoint_url=ENDPOINT_URL, region_name=REGION, verify=CERT_FILE)
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         try:
@@ -38,7 +44,8 @@ def create_s3_bucket(bucket_name, queue_arn = None, include_sqs_notifications=Fa
         region_name=REGION,
         endpoint_url=ENDPOINT_URL,
         aws_access_key_id='test',
-        aws_secret_access_key='test')
+        aws_secret_access_key='test',
+        verify=CERT_FILE)
 
     bucket = s3.Bucket(bucket_name)
     bucket.create(Bucket=bucket_name,
@@ -62,7 +69,8 @@ def create_sqs_queue(queue_name):
                        region_name=REGION,
                        endpoint_url=ENDPOINT_URL,
                        aws_access_key_id='test',
-                       aws_secret_access_key='test')
+                       aws_secret_access_key='test',
+                       verify=CERT_FILE)
 
     dlq = sqs.create_queue(QueueName=f'{queue_name}-dlq')
     dlq_url = dlq.url

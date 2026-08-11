@@ -57,7 +57,7 @@ services:
   # Image evaluation worker (events.tasks) only.
   # Use only 1 worker because each worker has a copy of the rules model
   # If more workers are needed scale the docker container.
-  scoutcam-celery-worker-ml:
+  rules-ml-worker:
     build:
       context: .
       args:
@@ -66,8 +66,8 @@ services:
         # C compiler on board.
         INSTALL_ML_BUILD_TOOLS: "1"
     image: scoutcam-webservice-worker-ml:0.1.0
-    container_name: scoutcam-celery-worker-ml
-    command: celery -A scoutcamservice worker -Q events --concurrency=1 -l ${CELERY_WORKER_LOG_LEVEL:-INFO}
+    container_name: rules-ml-worker
+    command: celery -A scoutcamservice worker -Q events --concurrency=1 -l ${CELERY_ML_WORKER_LOG_LEVEL:-INFO}
     environment:
       PRELOAD_RULES_MODEL: "1"
     env_file:
@@ -92,12 +92,12 @@ services:
       - scoutcam-network
 
   # Stream sweeping worker (camera.tasks)
-  scoutcam-celery-worker-lite:
+  stream-command-worker:
     build:
       context: .
     image: scoutcam-webservice:0.1.0
-    container_name: scoutcam-celery-worker-lite
-    command: celery -A scoutcamservice worker -Q camera --concurrency=2 -l ${CELERY_WORKER_LOG_LEVEL:-INFO}
+    container_name: stream-command-worker
+    command: celery -A scoutcamservice worker -Q camera --concurrency=2 -l ${CELERY_STREAMING_COMMAND_WORKER_LOG_LEVEL:-INFO}
     env_file:
       - .env
     tty: true
@@ -110,11 +110,11 @@ services:
 
   # Beat only schedules; it shares the worker image so there's one build to keep
   # in sync rather than three.
-  scoutcam-celery-beat:
+  stream-cleanup-scheduler:
     build:
       context: .
     image: scoutcam-webservice:0.1.0
-    container_name: scoutcam-celery-beat
+    container_name: stream-cleanup-scheduler
     command: celery -A scoutcamservice beat -l ${CELERY_BEAT_LOG_LEVEL:-INFO}
     env_file:
       - .env
@@ -126,12 +126,17 @@ services:
     networks:
       - scoutcam-network
 
-  scoutcam-event-consumer:
+  detection-event-consumer:
     build:
       context: .
     image: scoutcam-webservice:0.1.0
-    container_name: scoutcam-event-consumer
+    container_name: detection-event-consumer
     command: python manage.py consume_events
+    # The app-level retry in SQSImageQueueClient covers the queue not existing
+    # yet; this is the backstop for everything else -- if it still crashes
+    # (retries exhausted, transient network loss, etc.) Docker brings it back
+    # instead of it staying dead until someone notices.
+    restart: unless-stopped
     env_file:
       - .env
     depends_on:
@@ -156,7 +161,10 @@ services:
     ports:
       - "5001:5001" # These need to match for presigned urls in dev env.
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5001/moto-api/')"]
+      # moto now serves TLS-only (run_server.py passes -c/-k); the cert is
+      # self-signed for local dev, so this liveness probe skips verification
+      # rather than trusting it.
+      test: ["CMD", "python", "-c", "import ssl, urllib.request; urllib.request.urlopen('https://localhost:5001/moto-api/', context=ssl._create_unverified_context())"]
       interval: 5s
       timeout: 5s
       retries: 10

@@ -1,4 +1,6 @@
 import uuid
+from urllib.parse import urlparse, parse_qs
+
 from rest_framework import viewsets
 from rest_framework.exceptions import ParseError
 from rest_framework.pagination import CursorPagination
@@ -15,6 +17,29 @@ class NotificationPagination(CursorPagination):
     max_page_size = 100
     cursor_query_param = 'cursor'
     ordering = '-public_notification_id'
+
+    def encode_cursor(self, cursor):
+        """Return the bare cursor token instead of a full next/previous URL.
+
+        Delegates to DRF for the actual offset/reverse/position -> base64
+        encoding and only strips the URL wrapper off the result, so this stays
+        correct if DRF's internal cursor format ever changes. The client
+        resends the token as-is via `?cursor=<token>`; a bare token also
+        avoids baking this server's scheme/host into the response, which
+        matters behind a reverse proxy that changes either.
+        """
+        url = super().encode_cursor(cursor)
+        query = parse_qs(urlparse(url).query)
+        return query[self.cursor_query_param][0]
+
+    def get_paginated_response_schema(self, schema):
+        # next/previous are bare cursor tokens now, not URLs -- the parent's
+        # schema advertises `format: uri`, which would be wrong here.
+        response_schema = super().get_paginated_response_schema(schema)
+        for field in ('next', 'previous'):
+            response_schema['properties'][field].pop('format', None)
+            response_schema['properties'][field]['example'] = 'cD00ODY='
+        return response_schema
 
 @extend_schema_view(
     list=extend_schema(

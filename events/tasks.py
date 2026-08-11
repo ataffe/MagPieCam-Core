@@ -1,7 +1,7 @@
 import logging
 from celery import shared_task
 
-
+from django.conf import settings
 from events.processing import process_camera_image
 from events.sqs import SQSImageQueueClient
 from events.storage import S3ImageStorageClient
@@ -23,8 +23,17 @@ def evaluate_camera_image(self, bucket: str, key: str, public_camera_id: str,
 
     notifications = process_camera_image(public_camera_id, image)
     all_notifications_sent = True
+    try:
+        detection_preview_url = storage.get_image_download_url(bucket, key)
+    except Exception as exc:
+        logger.exception('Failed to generate download url for s3://%s/%s', bucket, key)
+        raise self.retry(exc=exc)
+
+    if settings.VPN_IP:
+        detection_preview_url = detection_preview_url.replace(settings.DEV_IP, settings.VPN_IP)
+
     for notification in notifications:
-        sent_notification = send_notification(notification)
+        sent_notification = send_notification(notification, detection_preview_url)
         all_notifications_sent = all_notifications_sent and sent_notification
 
     if receipt_handle:

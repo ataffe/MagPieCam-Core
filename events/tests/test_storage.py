@@ -39,16 +39,25 @@ def _parsed_message(bucket='bucket-1', key='users/camera-1/img.jpg',
 
 # --- __init__ ---
 
-def test_constructor_creates_s3_resource_with_config_credentials():
+def test_constructor_creates_s3_client_with_config_credentials():
     with patch('events.storage.boto3') as mock_boto3:
         S3ImageStorageClient(S3_CONFIG)
-    mock_boto3.resource.assert_called_once_with(
-        's3',
-        endpoint_url='https://s3.example.com',
-        region_name='us-west-1',
-        aws_access_key_id='test-key',
-        aws_secret_access_key='test-secret',
-    )
+    mock_boto3.client.assert_called_once()
+    args, kwargs = mock_boto3.client.call_args
+    assert args == ('s3',)
+    assert kwargs['endpoint_url'] == 'https://s3.example.com'
+    assert kwargs['region_name'] == 'us-west-1'
+    assert kwargs['aws_access_key_id'] == 'test-key'
+    assert kwargs['aws_secret_access_key'] == 'test-secret'
+
+
+def test_constructor_creates_s3_client_with_s3v4_signature():
+    # generate_presigned_url needs sigv4 -- moto/some S3-compatible backends
+    # default to sigv2, which produces URLs the object store rejects.
+    with patch('events.storage.boto3') as mock_boto3:
+        S3ImageStorageClient(S3_CONFIG)
+    _, kwargs = mock_boto3.client.call_args
+    assert kwargs['config'].signature_version == 's3v4'
 
 
 def test_constructor_defaults_num_workers_to_ten():
@@ -67,7 +76,7 @@ def test_constructor_accepts_custom_num_workers():
 def test_fetch_image_returns_camera_id_and_image_on_success():
     client = _make_client()
     parsed = _parsed_message(public_camera_id='camera-42')
-    client.s3_resource.Object.return_value.get.return_value = {
+    client.s3_client.get_object.return_value = {
         'Body': io.BytesIO(_jpeg_bytes())
     }
 
@@ -81,14 +90,14 @@ def test_fetch_image_returns_camera_id_and_image_on_success():
 def test_fetch_image_requests_correct_bucket_and_key():
     client = _make_client()
     parsed = _parsed_message(bucket='my-bucket', key='users/cam/img.jpg')
-    client.s3_resource.Object.return_value.get.return_value = {
+    client.s3_client.get_object.return_value = {
         'Body': io.BytesIO(_jpeg_bytes())
     }
 
     client._fetch_image(parsed)
 
-    client.s3_resource.Object.assert_called_once_with(
-        bucket_name='my-bucket', key='users/cam/img.jpg')
+    client.s3_client.get_object.assert_called_once_with(
+        Bucket='my-bucket', Key='users/cam/img.jpg')
 
 
 def test_fetch_image_does_not_delete_the_message_on_success():
@@ -100,7 +109,7 @@ def test_fetch_image_does_not_delete_the_message_on_success():
     """
     client = _make_client()
     parsed = _parsed_message()
-    client.s3_resource.Object.return_value.get.return_value = {
+    client.s3_client.get_object.return_value = {
         'Body': io.BytesIO(_jpeg_bytes())
     }
 
@@ -112,7 +121,7 @@ def test_fetch_image_does_not_delete_the_message_on_success():
 def test_fetch_image_returns_none_when_get_raises():
     client = _make_client()
     parsed = _parsed_message()
-    client.s3_resource.Object.return_value.get.side_effect = Exception('boom')
+    client.s3_client.get_object.side_effect = Exception('boom')
 
     result = client._fetch_image(parsed)
 
@@ -122,7 +131,7 @@ def test_fetch_image_returns_none_when_get_raises():
 def test_fetch_image_does_not_delete_message_when_get_fails():
     client = _make_client()
     parsed = _parsed_message()
-    client.s3_resource.Object.return_value.get.side_effect = Exception('boom')
+    client.s3_client.get_object.side_effect = Exception('boom')
 
     client._fetch_image(parsed)
 
@@ -132,7 +141,7 @@ def test_fetch_image_does_not_delete_message_when_get_fails():
 def test_fetch_image_returns_none_when_image_bytes_are_corrupt():
     client = _make_client()
     parsed = _parsed_message()
-    client.s3_resource.Object.return_value.get.return_value = {
+    client.s3_client.get_object.return_value = {
         'Body': io.BytesIO(b'not an image')
     }
 
@@ -150,8 +159,8 @@ def test_download_images_groups_by_camera_id():
         _parsed_message(key='users/camera-1/b.jpg', public_camera_id='camera-1'),
         _parsed_message(key='users/camera-2/c.jpg', public_camera_id='camera-2'),
     ]
-    client.s3_resource.Object.return_value.get.side_effect = (
-        lambda: {'Body': io.BytesIO(_jpeg_bytes())})
+    client.s3_client.get_object.side_effect = (
+        lambda **kwargs: {'Body': io.BytesIO(_jpeg_bytes())})
 
     result = client.download_images(messages)
 
@@ -164,15 +173,12 @@ def test_download_images_skips_failed_downloads():
     good = _parsed_message(key='users/camera-1/a.jpg', public_camera_id='camera-1')
     bad = _parsed_message(key='users/camera-1/b.jpg', public_camera_id='camera-1')
 
-    def get_side_effect(bucket_name, key):
-        obj = MagicMock()
-        if key == bad.key:
-            obj.get.side_effect = Exception('boom')
-        else:
-            obj.get.return_value = {'Body': io.BytesIO(_jpeg_bytes())}
-        return obj
+    def get_side_effect(Bucket, Key):
+        if Key == bad.key:
+            raise Exception('boom')
+        return {'Body': io.BytesIO(_jpeg_bytes())}
 
-    client.s3_resource.Object.side_effect = get_side_effect
+    client.s3_client.get_object.side_effect = get_side_effect
 
     result = client.download_images([good, bad])
 

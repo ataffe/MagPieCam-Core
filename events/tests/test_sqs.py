@@ -2,7 +2,17 @@ import json
 import pytest
 from unittest.mock import MagicMock, patch
 
+from botocore.exceptions import ClientError
+from django.conf import settings
+
 from events.sqs import ParsedSQSMessage, SQSImageQueueClient
+
+
+def _queue_not_found_error():
+    return ClientError(
+        {'Error': {'Code': 'AWS.SimpleQueueService.NonExistentQueue',
+                    'Message': 'The specified queue does not exist.'}},
+        'GetQueueUrl')
 
 
 SQS_CONFIG = {
@@ -14,6 +24,8 @@ SQS_CONFIG = {
         'queue_name': 'test-queue',
         'max_number_of_messages': 5,
         'wait_time_seconds': 10,
+        'max_retry_attempts': 10,
+        'retry_mode': 'standard',
     },
 }
 
@@ -108,13 +120,13 @@ def test_key_bucket_and_public_camera_id_are_read_only_properties():
 def test_constructor_creates_sqs_resource_with_config_credentials():
     with patch('events.sqs.boto3') as mock_boto3:
         SQSImageQueueClient(SQS_CONFIG)
-    mock_boto3.resource.assert_called_once_with(
-        'sqs',
-        endpoint_url='https://sqs.example.com',
-        region_name='us-west-1',
-        aws_access_key_id='test-key',
-        aws_secret_access_key='test-secret',
-    )
+    mock_boto3.resource.assert_called_once()
+    args, kwargs = mock_boto3.resource.call_args
+    assert args == ('sqs',)
+    assert kwargs['endpoint_url'] == 'https://sqs.example.com'
+    assert kwargs['region_name'] == 'us-west-1'
+    assert kwargs['aws_access_key_id'] == 'test-key'
+    assert kwargs['aws_secret_access_key'] == 'test-secret'
 
 
 def test_constructor_looks_up_queue_by_configured_name():
@@ -130,6 +142,42 @@ def test_constructor_sets_max_messages_and_wait_time_from_config():
         client = SQSImageQueueClient(SQS_CONFIG)
     assert client.max_messages == 5
     assert client.wait_time_seconds == 10
+
+
+def test_constructor_retries_queue_lookup_when_queue_does_not_exist_yet():
+    # Regression test: boto3's own retry config never covers
+    # NonExistentQueue (a well-formed 400, not a transient fault), so without
+    # an app-level retry this raised on the very first attempt.
+    with patch('events.sqs.boto3') as mock_boto3, \
+         patch('time.sleep', return_value=None):
+        mock_get_queue = mock_boto3.resource.return_value.get_queue_by_name
+        mock_get_queue.side_effect = [
+            _queue_not_found_error(), _queue_not_found_error(), 'the-resolved-queue']
+        client = SQSImageQueueClient(SQS_CONFIG)
+    assert client.queue == 'the-resolved-queue'
+    assert mock_get_queue.call_count == 3
+
+
+def test_constructor_gives_up_after_exhausting_queue_lookup_retries():
+    with patch('events.sqs.boto3') as mock_boto3, \
+         patch('time.sleep', return_value=None):
+        mock_get_queue = mock_boto3.resource.return_value.get_queue_by_name
+        mock_get_queue.side_effect = _queue_not_found_error()
+        with pytest.raises(ClientError):
+            SQSImageQueueClient(SQS_CONFIG)
+    assert mock_get_queue.call_count == settings.SQS_QUEUE_LOOKUP_RETRIES
+
+
+def test_constructor_does_not_retry_on_a_non_client_error():
+    # A bug in our own code (e.g. a bad config key) shouldn't be masked by
+    # eight retries before surfacing.
+    with patch('events.sqs.boto3') as mock_boto3, \
+         patch('time.sleep', return_value=None):
+        mock_get_queue = mock_boto3.resource.return_value.get_queue_by_name
+        mock_get_queue.side_effect = TypeError('boom')
+        with pytest.raises(TypeError):
+            SQSImageQueueClient(SQS_CONFIG)
+    assert mock_get_queue.call_count == 1
 
 
 # --- get_parsed_messages ---

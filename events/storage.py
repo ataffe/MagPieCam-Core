@@ -6,6 +6,7 @@ from typing import Dict, List, Tuple
 
 import boto3
 from PIL import Image
+from botocore.config import Config
 from django.conf import settings
 
 from events.interfaces import ImageStorageClient, ParsedMessage
@@ -19,24 +20,36 @@ def s3_config_from_settings() -> dict:
         'region_name': settings.AWS_REGION,
         'aws_access_key_id': settings.AWS_ACCESS_KEY_ID,
         'aws_secret_access_key': settings.AWS_SECRET_ACCESS_KEY,
+        'aws_cert_file': settings.AWS_CERT_FILE_PATH,
     }
 
 
 class S3ImageStorageClient(ImageStorageClient):
     def __init__(self, config_dict=None, num_workers=10):
         config_dict = config_dict or s3_config_from_settings()
-        self.s3_resource = boto3.resource(
+        # A single client handles both object downloads and presigned URLs --
+        # the resource API has no presigned-URL support, so there's no reason
+        # to keep two separate boto3 handles open.
+        self.s3_client = boto3.client(
             's3',
             endpoint_url=config_dict['endpoint_url'],
             region_name=config_dict['region_name'],
             aws_access_key_id=config_dict['aws_access_key_id'],
-            aws_secret_access_key=config_dict['aws_secret_access_key'])
+            aws_secret_access_key=config_dict['aws_secret_access_key'],
+            verify=config_dict['aws_cert_file'],
+            config=Config(signature_version='s3v4')
+        )
         self.num_workers = num_workers
 
     def download_image(self, bucket: str, key: str) -> Image.Image:
-        """Fetch a single object. Raises rather than returning None so a Celery
+        """Fetch a single object. Raises errors rather than returning None so a Celery
         task can fail loudly and let the message become visible again."""
-        response = self.s3_resource.Object(bucket_name=bucket, key=key).get()
+        try:
+            response = self.s3_client.get_object(Bucket=bucket, Key=key)
+        except self.s3_client.exceptions.NoSuchKey as e:
+            logger.exception(f"No image found for key {key}")
+            raise e
+
         image = Image.open(io.BytesIO(response['Body'].read()))
         image.load()
         return image
@@ -66,3 +79,14 @@ class S3ImageStorageClient(ImageStorageClient):
             logger.warning(f'{failed_count}/{len(parsed_messages)} images failed to download')
 
         return images_by_camera_id_dict
+
+    def get_image_download_url(self, img_bucket: str, img_key: str) -> str:
+        url = self.s3_client.generate_presigned_url(
+            ClientMethod='get_object',
+            Params={'Bucket': img_bucket, 'Key': img_key},
+            ExpiresIn=300
+        )
+        if settings.ENVIRONMENT == 'dev':
+            url = url.replace('scout-moto', settings.DEV_IP)
+        return url
+
