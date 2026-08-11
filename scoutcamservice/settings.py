@@ -180,6 +180,7 @@ AWS_IMG_PREVIEW_BUCKET = os.environ.get('AWS_IMG_PREVIEW_BUCKET', '')
 AWS_ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL", default=None)
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", default="test")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", default="test")
+AWS_CERT_FILE_PATH = os.environ.get("AWS_CERT_FILE_PATH", default=None)
 
 # Redis
 REDIS_HOST = os.environ.get('REDIS_HOST', default="localhost")
@@ -196,6 +197,13 @@ MEDIAMTX_API_URL = os.environ.get("MEDIAMTX_API_URL", default="http://localhost:
 SQS_QUEUE_NAME = os.environ.get('SQS_QUEUE_NAME', '')
 SQS_MAX_NUMBER_OF_MESSAGES = int(os.environ.get('SQS_MAX_NUMBER_OF_MESSAGES', 10))
 SQS_WAIT_TIME_SECONDS = int(os.environ.get('SQS_WAIT_TIME_SECONDS', 10))
+SQS_MAX_RETRY_ATTEMPTS= int(os.environ.get('SQS_MAX_RETRY_ATTEMPTS', 10))
+SQS_RETRY_MODE = str(os.environ.get('SQS_RETRY_MODE', 'standard'))
+# Separate from the boto3 retry config above: that only covers transient/
+# throttling errors, never "queue does not exist" (a well-formed 400 the SDK
+# treats as permanent). This covers the startup race against whatever
+# provisions the queue.
+SQS_QUEUE_LOOKUP_RETRIES = int(os.environ.get('SQS_QUEUE_LOOKUP_RETRIES', 8))
 
 # Rules model. Shape matches what events.ml.factory.build_rules_model expects;
 # it takes a plain dict so the ml package stays free of Django imports.
@@ -209,6 +217,7 @@ ML_CONFIG = {
 # Environment Tracking
 ENVIRONMENT = os.environ.get('ENV', default="dev")
 DEV_IP = os.environ.get('DEV_IP', default="127.0.0.1")
+VPN_IP = os.environ.get('VPN_IP', default="")
 
 # Celery
 # db 1, while the streaming state keys live in db 0: a FLUSHDB while debugging

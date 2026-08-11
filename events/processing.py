@@ -30,12 +30,6 @@ def get_rules_model():
 
 def create_notifications(public_camera_id: str, triggered_rule_ids: list[str]) -> list[Notification]:
     """Record one notification per rule that fired and isn't cooling down.
-
-    Rules are re-queried scoped to this camera, so a model that echoes back an
-    id belonging to someone else's camera can't create a notification on it.
-    A rule triggered within RULE_TRIGGER_COOLDOWN_MINUTES of its last trigger
-    is skipped entirely, so repeated detections don't pile up as duplicate
-    notifications.
     """
     if not triggered_rule_ids:
         return []
@@ -63,7 +57,7 @@ def create_notifications(public_camera_id: str, triggered_rule_ids: list[str]) -
         Rule.objects.filter(id__in=[rule.id for rule in rules]).update(last_triggered=timezone.now())
 
         return Notification.objects.bulk_create(
-            [Notification(camera=camera, rule=rule) for rule in rules])
+            [Notification(camera=camera, rule=rule, rule_nickname=rule.rule_nickname) for rule in rules])
 
 
 def process_camera_image(public_camera_id: str, image) -> list[Notification]:

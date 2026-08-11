@@ -130,7 +130,7 @@ def triggered_rule_ids(
             triggered.append(rule_verdict.id)
             logger.info("Rule %s triggered (verdict=%s)", rule_verdict.id, rule_verdict.verdict)
         elif rule_verdict.verdict == "no":
-            logger.info("Rule %s not triggered (verdict=%s)", rule_verdict.id, rule_verdict.verdict)
+            logger.debug("Rule %s not triggered (verdict=%s)", rule_verdict.id, rule_verdict.verdict)
         else:
             logger.info("Rule %s unsure (verdict=%s)", rule_verdict.id, rule_verdict.verdict)
     return triggered

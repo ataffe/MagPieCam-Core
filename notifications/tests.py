@@ -37,7 +37,8 @@ class NotificationTests(TestCase):
             rule='Notify on motion',
             rule_nickname='Motion alert',
         )
-        self.notification = Notification.objects.create(camera=self.camera, rule=self.rule)
+        self.notification = Notification.objects.create(
+            camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname)
 
     def get_jwt_token(self, user):
         refresh = RefreshToken.for_user(user)
@@ -67,7 +68,8 @@ class NotificationTests(TestCase):
             owner=self.user, camera=other_camera,
             rule='Other rule', rule_nickname='Other',
         )
-        Notification.objects.create(camera=other_camera, rule=other_rule)
+        Notification.objects.create(
+            camera=other_camera, rule=other_rule, rule_nickname=other_rule.rule_nickname)
 
         response = self.client.get(self._notifications_list_url())
         self.assertEqual(response.status_code, 200)
@@ -82,12 +84,59 @@ class NotificationTests(TestCase):
         self.assertEqual(response.json()['results'], [])
 
     def test_list_ordered_newest_first(self):
-        second = Notification.objects.create(camera=self.camera, rule=self.rule)
+        second = Notification.objects.create(
+            camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname)
         response = self.client.get(self._notifications_list_url())
         self.assertEqual(response.status_code, 200)
         results = response.json()['results']
         self.assertEqual(results[0]['public_notification_id'], str(second.public_notification_id))
         self.assertEqual(results[1]['public_notification_id'], str(self.notification.public_notification_id))
+
+    def test_list_next_cursor_is_a_bare_token_not_a_url(self):
+        for _ in range(3):
+            Notification.objects.create(
+                camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname)
+
+        # NotificationPagination has no page_size query param wired up, so
+        # shrink the page by patching the pagination class directly instead.
+        from notifications.views import NotificationPagination
+        original_page_size = NotificationPagination.page_size
+        NotificationPagination.page_size = 2
+        try:
+            response = self.client.get(self._notifications_list_url())
+        finally:
+            NotificationPagination.page_size = original_page_size
+
+        self.assertEqual(response.status_code, 200)
+        next_cursor = response.json()['next']
+        self.assertIsNotNone(next_cursor)
+        self.assertNotIn('://', next_cursor)
+        self.assertNotIn('/', next_cursor)
+        self.assertNotIn(self._notifications_list_url(), next_cursor)
+
+    def test_list_next_cursor_round_trips_to_the_following_page(self):
+        notifications = [self.notification]
+        for _ in range(3):
+            notifications.append(Notification.objects.create(
+                camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname))
+        # Newest first: notifications[3] is first page, notifications[0] is last.
+
+        from notifications.views import NotificationPagination
+        original_page_size = NotificationPagination.page_size
+        NotificationPagination.page_size = 2
+        try:
+            first_page = self.client.get(self._notifications_list_url())
+            next_cursor = first_page.json()['next']
+            second_page = self.client.get(self._notifications_list_url(), {'cursor': next_cursor})
+        finally:
+            NotificationPagination.page_size = original_page_size
+
+        self.assertEqual(second_page.status_code, 200)
+        second_page_ids = [n['public_notification_id'] for n in second_page.json()['results']]
+        self.assertEqual(second_page_ids, [
+            str(notifications[1].public_notification_id),
+            str(notifications[0].public_notification_id),
+        ])
 
     def test_retrieve_notification_returns_correct_data(self):
         response = self.client.get(self._notification_detail_url())
@@ -112,7 +161,8 @@ class NotificationTests(TestCase):
             owner=self.other_user, camera=other_camera,
             rule='Other rule', rule_nickname='Other',
         )
-        other_notification = Notification.objects.create(camera=other_camera, rule=other_rule)
+        other_notification = Notification.objects.create(
+            camera=other_camera, rule=other_rule, rule_nickname=other_rule.rule_nickname)
         response = self.client.get(self._notification_detail_url(
             public_notification_id=other_notification.public_notification_id, camera=other_camera,
         ))
@@ -141,18 +191,22 @@ class NotificationTests(TestCase):
         self.notification.refresh_from_db()
         self.assertIsNone(self.notification.rule)
 
-    def test_retrieve_notification_omits_rule_nickname_when_rule_was_deleted(self):
-        # rule_nickname has no `default`/`allow_null`, so DRF's dotted source
-        # (rule.rule_nickname) hits AttributeError on a None rule and skips the
-        # field entirely -- the key is missing from the response, not null.
+    def test_retrieve_notification_keeps_rule_nickname_after_rule_deleted(self):
+        # rule_nickname is copied onto the notification at creation time
+        # specifically so it survives rule deletion -- SET_NULL only clears the
+        # FK, it doesn't touch this denormalized column.
+        expected_nickname = self.rule.rule_nickname
         self.rule.delete()
         response = self.client.get(self._notification_detail_url())
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn('rule_nickname', response.json())
+        self.assertEqual(response.json()['rule_nickname'], expected_nickname)
 
     def test_deleting_camera_cascades_to_notifications(self):
         self.camera.delete()
         self.assertFalse(Notification.objects.filter(pk=self.notification.pk).exists())
+
+
+PREVIEW_IMG_URL = 'https://s3.example.com/bucket/detection.jpg?X-Amz-Signature=abc'
 
 
 class ApnsClientTests(TestCase):
@@ -166,7 +220,8 @@ class ApnsClientTests(TestCase):
             owner=self.user, camera=self.camera,
             rule='Notify on motion', rule_nickname='Motion alert',
         )
-        self.notification = Notification.objects.create(camera=self.camera, rule=self.rule)
+        self.notification = Notification.objects.create(
+            camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname)
         self.addCleanup(apns_client.cache_storage.clear)
 
     def _mock_client(self, mock_client_cls, status_code=200, json_data=None, content=b'{}', headers=None):
@@ -209,7 +264,7 @@ class ApnsClientTests(TestCase):
     @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
     def test_send_notification_success(self, mock_refresh, mock_client_cls):
         instance = self._mock_client(mock_client_cls, status_code=200)
-        result = apns_client.send_notification(self.notification)
+        result = apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
         self.assertTrue(result)
         called_headers = instance.post.call_args.kwargs['headers']
         self.assertEqual(called_headers['authorization'], 'bearer fake-jwt')
@@ -220,11 +275,31 @@ class ApnsClientTests(TestCase):
 
     @patch('notifications.apns_client.httpx.Client')
     @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_send_notification_includes_preview_image_url_in_payload(
+            self, mock_refresh, mock_client_cls):
+        instance = self._mock_client(mock_client_cls, status_code=200)
+        apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
+        called_body = instance.post.call_args.kwargs['json']
+        self.assertEqual(called_body['detection-image-url'], PREVIEW_IMG_URL)
+
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_send_notification_sets_mutable_content_for_the_image_attachment(
+            self, mock_refresh, mock_client_cls):
+        # mutable-content=1 is what lets the iOS Notification Service Extension
+        # intercept the push and download detection-image-url before display.
+        instance = self._mock_client(mock_client_cls, status_code=200)
+        apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
+        called_body = instance.post.call_args.kwargs['json']
+        self.assertEqual(called_body['aps']['mutable-content'], 1)
+
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
     def test_send_notification_does_not_touch_rule_last_triggered(self, mock_refresh, mock_client_cls):
         # Cooldown bookkeeping now lives in events.processing.create_notifications,
         # not in the APNs transport client.
         self._mock_client(mock_client_cls, status_code=200)
-        apns_client.send_notification(self.notification)
+        apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
         self.rule.refresh_from_db()
         self.assertIsNone(self.rule.last_triggered)
 
@@ -232,14 +307,14 @@ class ApnsClientTests(TestCase):
     def test_send_notification_without_device_id_returns_false_without_calling_apns(self, mock_client_cls):
         self.user.apns_device_id = None
         self.user.save()
-        result = apns_client.send_notification(self.notification)
+        result = apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
         self.assertFalse(result)
         mock_client_cls.assert_not_called()
 
     @patch('notifications.apns_client.httpx.Client')
     @patch('notifications.apns_client.refresh_jwt', side_effect=FileNotFoundError('no key'))
     def test_send_notification_returns_false_when_jwt_refresh_fails(self, mock_refresh, mock_client_cls):
-        result = apns_client.send_notification(self.notification)
+        result = apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
         self.assertFalse(result)
         mock_client_cls.assert_not_called()
 
@@ -247,7 +322,7 @@ class ApnsClientTests(TestCase):
     @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
     def test_send_notification_returns_false_on_client_error_without_retry(self, mock_refresh, mock_client_cls):
         instance = self._mock_client(mock_client_cls, status_code=400, json_data={'reason': 'BadDeviceToken'})
-        result = apns_client.send_notification(self.notification)
+        result = apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
         self.assertFalse(result)
         self.assertEqual(instance.post.call_count, 1)
 
@@ -259,7 +334,7 @@ class ApnsClientTests(TestCase):
         ok_response = MagicMock(status_code=200, content=b'')
         instance = mock_client_cls.return_value.__enter__.return_value
         instance.post.side_effect = [fail_response, ok_response]
-        result = apns_client.send_notification(self.notification)
+        result = apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
         self.assertTrue(result)
         self.assertEqual(instance.post.call_count, 2)
 
@@ -274,6 +349,6 @@ class ApnsClientTests(TestCase):
         fail_response = MagicMock(status_code=500, content=b'')
         instance = mock_client_cls.return_value.__enter__.return_value
         instance.post.return_value = fail_response
-        result = apns_client.send_notification(self.notification)
+        result = apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
         self.assertFalse(result)
         self.assertEqual(instance.post.call_count, settings.APNS_CLIENT_RETRIES)

@@ -11,4 +11,4 @@ from moto.server import main
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 if __name__ == "__main__":
-    main(["-H", "0.0.0.0", "-p", "5001"])
+    main(["-H", "0.0.0.0", "-p", "5001", "-c", "certs/cert.pem", "-k", "certs/key.pem"])

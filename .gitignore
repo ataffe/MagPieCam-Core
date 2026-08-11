@@ -214,3 +214,4 @@ raspberry_pi_test_device_id.txt
 
 crypto
 staticfiles
+docker/moto/certs/
