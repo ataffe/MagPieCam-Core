@@ -11,6 +11,7 @@ S3_CONFIG = {
     'region_name': 'us-west-1',
     'aws_access_key_id': 'test-key',
     'aws_secret_access_key': 'test-secret',
+    'aws_cert_file': '/fake/cert.pem',
 }
 
 
@@ -49,6 +50,7 @@ def test_constructor_creates_s3_client_with_config_credentials():
     assert kwargs['region_name'] == 'us-west-1'
     assert kwargs['aws_access_key_id'] == 'test-key'
     assert kwargs['aws_secret_access_key'] == 'test-secret'
+    assert kwargs['verify'] == '/fake/cert.pem'
 
 
 def test_constructor_creates_s3_client_with_s3v4_signature():

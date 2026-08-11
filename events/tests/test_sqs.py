@@ -20,6 +20,7 @@ SQS_CONFIG = {
     'region_name': 'us-west-1',
     'aws_access_key_id': 'test-key',
     'aws_secret_access_key': 'test-secret',
+    'aws_cert_file': '/fake/cert.pem',
     'sqs': {
         'queue_name': 'test-queue',
         'max_number_of_messages': 5,
@@ -127,6 +128,7 @@ def test_constructor_creates_sqs_resource_with_config_credentials():
     assert kwargs['region_name'] == 'us-west-1'
     assert kwargs['aws_access_key_id'] == 'test-key'
     assert kwargs['aws_secret_access_key'] == 'test-secret'
+    assert kwargs['verify'] == '/fake/cert.pem'
 
 
 def test_constructor_looks_up_queue_by_configured_name():
