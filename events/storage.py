@@ -14,10 +14,6 @@ from events.interfaces import ImageStorageClient, ParsedMessage
 
 logger = logging.getLogger('S3 Client')
 
-@lru_cache(maxsize=1)
-def get_s3_image_storage_client() -> S3ImageStorageClient:
-    return S3ImageStorageClient()
-
 def s3_config_from_settings() -> dict:
     return {
         'endpoint_url': settings.AWS_ENDPOINT_URL,
@@ -93,4 +89,9 @@ class S3ImageStorageClient(ImageStorageClient):
 
     def delete_object(self, bucket: str, key: str):
         self.s3_client.delete_object(Bucket=bucket, Key=key)
+
+
+@lru_cache(maxsize=1)
+def get_s3_image_storage_client() -> S3ImageStorageClient:
+    return S3ImageStorageClient()
 

@@ -103,6 +103,8 @@ def send_notification(notification: Notification, preview_img_url: str) -> bool:
             }
         },
         "detection-image-url": preview_img_url,
+        "camera-id": str(notification.camera.public_camera_id),
+        "notification-id": str(notification.public_notification_id),
     }
     url = f"{settings.APNS_URL}/3/device/{device_id}"
 
