@@ -44,6 +44,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # Required by Notification.rule_nicknames (ArrayField).
+    'django.contrib.postgres',
     'drf_spectacular'
 ]
 
@@ -171,12 +173,13 @@ AUTH_USER_MODEL = 'users.User'
 # ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1').split(',')
 
 # TODO: DON'T LET THIS INTO PRODUCTION!!!!!
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', '127.0.0.1').split(',')
 
 # AWS
 AWS_REGION = os.environ.get('AWS_REGION', '')
 AWS_IMG_DETECTION_BUCKET = os.environ.get('AWS_IMG_DETECTION_BUCKET', '')
 AWS_IMG_PREVIEW_BUCKET = os.environ.get('AWS_IMG_PREVIEW_BUCKET', '')
+AWS_VIDEO_CLIP_BUCKET = os.environ.get('AWS_VIDEO_CLIP_BUCKET', '')
 AWS_ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL", default=None)
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID", default="test")
 AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY", default="test")
@@ -199,14 +202,9 @@ SQS_MAX_NUMBER_OF_MESSAGES = int(os.environ.get('SQS_MAX_NUMBER_OF_MESSAGES', 10
 SQS_WAIT_TIME_SECONDS = int(os.environ.get('SQS_WAIT_TIME_SECONDS', 10))
 SQS_MAX_RETRY_ATTEMPTS= int(os.environ.get('SQS_MAX_RETRY_ATTEMPTS', 10))
 SQS_RETRY_MODE = str(os.environ.get('SQS_RETRY_MODE', 'standard'))
-# Separate from the boto3 retry config above: that only covers transient/
-# throttling errors, never "queue does not exist" (a well-formed 400 the SDK
-# treats as permanent). This covers the startup race against whatever
-# provisions the queue.
 SQS_QUEUE_LOOKUP_RETRIES = int(os.environ.get('SQS_QUEUE_LOOKUP_RETRIES', 8))
 
-# Rules model. Shape matches what events.ml.factory.build_rules_model expects;
-# it takes a plain dict so the ml package stays free of Django imports.
+# Rules model.
 ML_CONFIG = {
     'model_type': os.environ.get('ML_MODEL_TYPE', 'api'),
     'api_model_name': os.environ.get('ML_API_MODEL_NAME', 'gemini-3.1-flash-lite'),
@@ -220,24 +218,16 @@ DEV_IP = os.environ.get('DEV_IP', default="127.0.0.1")
 VPN_IP = os.environ.get('VPN_IP', default="")
 
 # Celery
-# db 1, while the streaming state keys live in db 0: a FLUSHDB while debugging
-# streaming would otherwise drop every queued task with it.
+# db 1, while the streaming state keys live in db 0
 CELERY_BROKER_URL = os.environ.get(
     'CELERY_BROKER_URL', default=f'redis://{REDIS_HOST}:{REDIS_PORT}/1')
-# Nothing waits on a task's return value -- the work is writing rows, stopping
-# streams, and sending pushes -- so results would only accumulate in Redis.
+
 CELERY_RESULT_BACKEND = None
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TIMEZONE = TIME_ZONE
-# Ack after the task returns, not when it's delivered, so a worker killed
-# mid-image puts the message back instead of silently dropping it.
 CELERY_TASK_ACKS_LATE = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
-# Keep the heavy image-evaluation work off the worker that runs the frequent,
-# lightweight stream sweep. The ML worker consumes 'events' at concurrency=1 so
-# exactly one copy of the rules model is loaded; a separate lite worker consumes
-# 'camera' so a long evaluation never delays a sweep tick.
 CELERY_TASK_ROUTES = {
     'events.tasks.*': {'queue': 'events'},
     'camera.tasks.*': {'queue': 'camera'},

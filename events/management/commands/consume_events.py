@@ -3,10 +3,11 @@
 import logging
 import signal
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from events.sqs import SQSImageQueueClient
-from events.tasks import evaluate_camera_image
+from events.tasks import attach_video_clip, evaluate_camera_image
 
 logger = logging.getLogger('Events')
 
@@ -46,7 +47,12 @@ class Command(BaseCommand):
     @staticmethod
     def _consume_batch(queue_client):
         for message in queue_client.get_parsed_messages():
-            evaluate_camera_image.delay(
+            if message.bucket == settings.AWS_VIDEO_CLIP_BUCKET:
+                task = attach_video_clip
+            else:
+                task = evaluate_camera_image
+
+            task.delay(
                 message.bucket,
                 message.key,
                 message.public_camera_id,

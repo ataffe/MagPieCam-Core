@@ -2,7 +2,6 @@ import hashlib
 import hmac
 import logging
 import secrets
-import uuid
 import asyncio
 
 from rest_framework import status
@@ -36,9 +35,12 @@ from camera.serializers import (
 from camera.authentication import CameraTokenAuthentication, CameraJWTAuthentication, authenticate_jwt_async
 from camera.s3_client import get_upload_url
 from camera.constants import UploadType
+from camera.media_keys import (
+    DETECTION_PREFIX, clip_key, detection_key, new_stem, parse_media_key, preview_key,
+)
 from camera.streaming_control import streaming_state_key, channel, publish_command, get_redis_client
 
-ALLOWED_TYPES = {"image/jpeg"}
+ALLOWED_TYPES = {"image/jpeg", "video/mp4"}
 logger = logging.getLogger('Camera API')
 
 class CameraTokenExchangeView(APIView):
@@ -282,8 +284,18 @@ class PresignedImageUploadUrlView(APIView):
                 name='upload_type',
                 type=OpenApiTypes.STR,
                 location=OpenApiParameter.QUERY,
-                enum=[UploadType.DETECTION, UploadType.CAMERA_PREVIEW],
+                enum=[UploadType.DETECTION, UploadType.CAMERA_PREVIEW, UploadType.VIDEO_CLIP],
                 required=True,
+            ),
+            OpenApiParameter(
+                name='detection_key',
+                type=OpenApiTypes.STR,
+                location=OpenApiParameter.QUERY,
+                required=False,
+                description='Required for VIDEO_CLIP uploads: the key returned by this '
+                            'camera\'s DETECTION upload for the same event. The clip is '
+                            'stored under the matching key so it can be paired with the '
+                            'notification that detection produced.',
             ),
         ],
         responses={
@@ -292,22 +304,44 @@ class PresignedImageUploadUrlView(APIView):
         },
     )
     def post(self, request):
-        """Issue a presigned S3 URL a camera device can upload a detection or preview image to."""
+        """Issue a presigned S3 URL a camera device can upload a detection image, preview image, or video clip to S3."""
         # User is really a Camera because CameraJWTAuthentication returns a camera instead of a user.
         # but django assigns the return value of authenticate to request.user
         camera = request.user
         public_camera_id = camera.public_camera_id
-        content_type = request.data.get('content_type', 'image/jpeg')
+        content_type = request.headers.get('content_type', '')
+        if not content_type:
+            return Response({'detail': 'Missing content type'}, status=status.HTTP_400_BAD_REQUEST)
+
         if content_type not in ALLOWED_TYPES:
-            return Response({'detail': 'Unsupported content type'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': f'Unsupported content type: {content_type}'}, status=status.HTTP_400_BAD_REQUEST)
 
         upload_type = self.request.query_params.get('upload_type', None)
+        if not upload_type:
+            return Response({'detail': 'Missing upload type'}, status=status.HTTP_400_BAD_REQUEST)
+
+        upload_type = upload_type.upper()
+        if not upload_type in [UploadType.DETECTION, UploadType.CAMERA_PREVIEW, UploadType.VIDEO_CLIP]:
+            return Response({f'detail': f'Unsupported upload type: {upload_type}'}, status=status.HTTP_400_BAD_REQUEST)
+
         if upload_type == UploadType.DETECTION:
-            img_key = f'detection/{public_camera_id}/{uuid.uuid4()}.jpg'
+            img_key = detection_key(public_camera_id, new_stem())
             url = get_upload_url(img_key=img_key, content_type=content_type, upload_type=UploadType.DETECTION)
         elif upload_type == UploadType.CAMERA_PREVIEW:
-            img_key = f'preview/{public_camera_id}/latest.jpg'
+            img_key = preview_key(public_camera_id)
             url = get_upload_url(img_key=img_key, content_type=content_type, upload_type=UploadType.CAMERA_PREVIEW)
+        elif upload_type == UploadType.VIDEO_CLIP:
+            # A clip is paired to its detection still by reusing that still's uuid stem
+            parsed_detection_key = parse_media_key(request.query_params.get('detection_key', ''))
+            if (parsed_detection_key is None
+                    or parsed_detection_key.prefix != DETECTION_PREFIX
+                    or parsed_detection_key.public_camera_id != str(public_camera_id)):
+                return Response(
+                    {'detail': "A 'detection_key' belonging to this camera is required to upload a video clip"},
+                    status=status.HTTP_400_BAD_REQUEST)
+            file_extension = 'mp4' if content_type == 'video/mp4' else 'jpg'
+            img_key = clip_key(public_camera_id, parsed_detection_key.stem, file_extension)
+            url = get_upload_url(img_key=img_key, content_type=content_type, upload_type=UploadType.VIDEO_CLIP)
         else:
             return Response({'detail': 'Missing or Unsupported upload type'}, status=status.HTTP_400_BAD_REQUEST)
 

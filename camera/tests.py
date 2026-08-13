@@ -4,6 +4,7 @@ import json
 import time
 import uuid
 from unittest.mock import patch, MagicMock, AsyncMock
+from urllib.parse import urlencode
 
 from asgiref.sync import sync_to_async
 from django.test import TestCase, override_settings
@@ -414,11 +415,27 @@ class PresignedUploadTests(TestCase):
         self.camera = Camera.objects.create(owner=self.user, location='Front door')
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {camera_access_token(self.camera)}')
 
-    def presign(self, content_type='image/jpeg', upload_type=UploadType.DETECTION):
+    def presign(self, content_type='image/jpeg', upload_type=UploadType.DETECTION,
+                detection_key=None):
         url = reverse('camera:presigned_upload')
+        params = {}
         if upload_type is not None:
-            url = f'{url}?upload_type={upload_type}'
-        return self.client.post(url, data={'content_type': content_type}, format='json')
+            params['upload_type'] = upload_type
+        if detection_key is not None:
+            params['detection_key'] = detection_key
+        if params:
+            url = f'{url}?{urlencode(params)}'
+        # The view reads the upload's content type off the request's actual
+        # Content-Type header rather than a JSON body field, so an empty body
+        # is needed to omit it (Django only sets CONTENT_TYPE in the WSGI
+        # environ when there's a body to describe).
+        if content_type is None:
+            return self.client.post(url)
+        return self.client.post(url, data=b'{}', content_type=content_type)
+
+    def a_detection_key(self, camera=None, stem='0e5f7a1c-2b3d-4e5f-8a9b-0c1d2e3f4a5b'):
+        camera = camera or self.camera
+        return f'detection/{camera.public_camera_id}/{stem}.jpg'
 
     @patch('camera.s3_client.boto3.client')
     def test_presigned_upload_detection_returns_url_for_authenticated_camera(self, mock_boto_client):
@@ -494,6 +511,95 @@ class PresignedUploadTests(TestCase):
         _, kwargs = mock_s3.generate_presigned_url.call_args
         self.assertEqual(kwargs['Params']['Bucket'], 'preview-bucket')
 
+    @patch('camera.s3_client.boto3.client')
+    def test_presigned_upload_video_clip_returns_url_for_authenticated_camera(self, mock_boto_client):
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        response = self.presign(content_type='video/mp4', upload_type=UploadType.VIDEO_CLIP,
+                                detection_key=self.a_detection_key())
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data['url'], 'https://example.com/presigned')
+        self.assertTrue(data['key'].startswith(f'clips/{self.camera.public_camera_id}/'))
+        self.assertTrue(data['key'].endswith('.mp4'))
+        self.assertEqual(data['expires_in'], 300)
+
+        _, kwargs = mock_s3.generate_presigned_url.call_args
+        self.assertEqual(kwargs['Params']['ContentType'], 'video/mp4')
+
+    @patch('camera.s3_client.boto3.client')
+    def test_presigned_upload_video_clip_reuses_the_detection_keys_stem(self, mock_boto_client):
+        """The shared uuid stem is the only thing linking an uploaded clip back to
+        the notification its detection still produced."""
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        response = self.presign(content_type='video/mp4', upload_type=UploadType.VIDEO_CLIP,
+                                detection_key=self.a_detection_key(stem='abc-123'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()['key'],
+            f'clips/{self.camera.public_camera_id}/abc-123.mp4',
+        )
+
+    @patch('camera.s3_client.boto3.client')
+    def test_presigned_upload_video_clip_with_jpeg_content_type_uses_jpg_extension(self, mock_boto_client):
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        response = self.presign(content_type='image/jpeg', upload_type=UploadType.VIDEO_CLIP,
+                                detection_key=self.a_detection_key())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['key'].endswith('.jpg'))
+
+    @override_settings(AWS_IMG_DETECTION_BUCKET='detection-bucket', AWS_VIDEO_CLIP_BUCKET='clip-bucket')
+    @patch('camera.s3_client.boto3.client')
+    def test_presigned_upload_video_clip_uses_video_clip_bucket(self, mock_boto_client):
+        """Regression test: VIDEO_CLIP uploads must go to their own bucket, not the
+        detection bucket used as the default in get_upload_url."""
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        response = self.presign(content_type='video/mp4', upload_type=UploadType.VIDEO_CLIP,
+                                detection_key=self.a_detection_key())
+
+        self.assertEqual(response.status_code, 200)
+        _, kwargs = mock_s3.generate_presigned_url.call_args
+        self.assertEqual(kwargs['Params']['Bucket'], 'clip-bucket')
+
+    def test_presigned_upload_video_clip_without_detection_key_returns_400(self):
+        response = self.presign(content_type='video/mp4', upload_type=UploadType.VIDEO_CLIP)
+        self.assertEqual(response.status_code, 400)
+
+    def test_presigned_upload_video_clip_rejects_another_cameras_detection_key(self):
+        """A camera must not be able to bind its clip to another camera's detection."""
+        other_camera = Camera.objects.create(owner=self.user, location='Garage')
+
+        response = self.presign(content_type='video/mp4', upload_type=UploadType.VIDEO_CLIP,
+                                detection_key=self.a_detection_key(camera=other_camera))
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_presigned_upload_video_clip_rejects_a_non_detection_key(self):
+        response = self.presign(
+            content_type='video/mp4', upload_type=UploadType.VIDEO_CLIP,
+            detection_key=f'preview/{self.camera.public_camera_id}/latest.jpg')
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_presigned_upload_video_clip_rejects_a_malformed_detection_key(self):
+        response = self.presign(content_type='video/mp4', upload_type=UploadType.VIDEO_CLIP,
+                                detection_key='not-a-key')
+        self.assertEqual(response.status_code, 400)
+
     def test_presigned_upload_missing_upload_type_returns_400(self):
         response = self.presign(upload_type=None)
         self.assertEqual(response.status_code, 400)
@@ -504,6 +610,10 @@ class PresignedUploadTests(TestCase):
 
     def test_presigned_upload_rejects_unsupported_content_type(self):
         response = self.presign(content_type='image/png', upload_type=UploadType.DETECTION)
+        self.assertEqual(response.status_code, 400)
+
+    def test_presigned_upload_missing_content_type_returns_400(self):
+        response = self.presign(content_type=None, upload_type=UploadType.DETECTION)
         self.assertEqual(response.status_code, 400)
 
     def test_presigned_upload_requires_authentication_returns_401(self):

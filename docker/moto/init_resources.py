@@ -21,6 +21,7 @@ CERT_FILE = "certs/cert.pem"
 
 DETECTION_BUCKET = os.environ.get("AWS_IMG_DETECTION_BUCKET")
 PREVIEW_BUCKET = os.environ.get("AWS_IMG_PREVIEW_BUCKET")
+VIDEO_CLIP_BUCKET = os.environ.get("AWS_VIDEO_CLIP_BUCKET")
 QUEUE_NAME = os.environ.get("SQS_QUEUE_NAME")
 
 
@@ -38,7 +39,7 @@ def wait_for_moto(timeout_seconds=40):
     sys.exit(1)
 
 
-def create_s3_bucket(bucket_name, queue_arn = None, include_sqs_notifications=False):
+def create_s3_bucket(bucket_name, queue_arn = None, include_sqs_notifications=False, expiration_days=2):
     s3 = boto3.resource(
         's3',
         region_name=REGION,
@@ -51,6 +52,15 @@ def create_s3_bucket(bucket_name, queue_arn = None, include_sqs_notifications=Fa
     bucket.create(Bucket=bucket_name,
                      CreateBucketConfiguration={'LocationConstraint': 'us-west-1'})
     print(f'Created S3 Bucket: {bucket.name}')
+    bucket_lifecycle = s3.BucketLifecycleConfiguration(bucket_name)
+    lifecycle_policy = {
+        'Rules': [
+            {
+                'Expiration': {'Days': expiration_days},
+            }
+        ]
+    }
+
     if include_sqs_notifications:
         bucket_notification = s3.BucketNotification(bucket_name)
         bucket_notification.put(
@@ -81,7 +91,7 @@ def create_sqs_queue(queue_name):
                               Attributes={
                                   'RedrivePolicy': json.dumps({
                                       'deadLetterTargetArn': dlq_arn,
-                                      'maxReceiveCount': 10, # move to DLQ after 3 failed receive attempts
+                                      'maxReceiveCount': 5, # move to DLQ after 5 failed receive attempts
                                       'MessageRetentionPeriod': 3600,
                                   })
                               })
@@ -115,7 +125,14 @@ if __name__ == "__main__":
     create_s3_bucket(
         bucket_name=DETECTION_BUCKET,
         queue_arn=image_queue_arn,
-        include_sqs_notifications=True)
+        include_sqs_notifications=True,
+        expiration_days=5)
 
     create_s3_bucket(
-        bucket_name=PREVIEW_BUCKET)
+        bucket_name=PREVIEW_BUCKET,
+        expiration_days=5)
+
+    create_s3_bucket(
+        bucket_name=VIDEO_CLIP_BUCKET,
+        queue_arn=image_queue_arn,
+        include_sqs_notifications=True)

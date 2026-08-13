@@ -137,14 +137,27 @@ paths:
   /v1/cameras/{camera_public_camera_id}/notifications/:
     get:
       operationId: v1_cameras_notifications_list
-      description: List or retrieve notifications for a camera owned by the authenticated
-        user.
+      description: List notifications for a camera owned by the authenticated user.
+      summary: List notifications for a camera
       parameters:
       - in: path
         name: camera_public_camera_id
         schema:
           type: string
         required: true
+      - name: cursor
+        required: false
+        in: query
+        description: The pagination cursor value.
+        schema:
+          type: string
+      - in: query
+        name: since
+        schema:
+          type: string
+          format: uuid
+        description: Return only notifications newer than this notification's public
+          ID.
       tags:
       - v1
       security:
@@ -154,9 +167,7 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Notification'
+                $ref: '#/components/schemas/PaginatedNotificationList'
           description: ''
   /v1/cameras/{camera_public_camera_id}/notifications/{public_notification_id}/:
     get:
@@ -184,6 +195,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Notification'
+          description: ''
+  /v1/cameras/{camera_public_camera_id}/notifications/clear/:
+    post:
+      operationId: v1_cameras_notifications_clear_create
+      description: Hide one or more of the authenticated user's notifications for
+        this camera from the app. Clearing an unknown or already-cleared id is a no-op
+        rather than an error.
+      summary: Clear notifications
+      parameters:
+      - in: path
+        name: camera_public_camera_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClearNotificationsRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClearNotificationsRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClearNotificationsRequest'
+        required: true
+      security:
+      - jwtAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClearNotificationsResponse'
           description: ''
   /v1/cameras/{camera_public_camera_id}/rules/:
     get:
@@ -591,8 +638,15 @@ paths:
     post:
       operationId: v1_cameras_presigned_upload_url_create
       description: Issue a presigned S3 URL a camera device can upload a detection
-        or preview image to.
+        image, preview image, or video clip to S3.
       parameters:
+      - in: query
+        name: detection_key
+        schema:
+          type: string
+        description: 'Required for VIDEO_CLIP uploads: the key returned by this camera''s
+          DETECTION upload for the same event. The clip is stored under the matching
+          key so it can be paired with the notification that detection produced.'
       - in: query
         name: upload_type
         schema:
@@ -600,6 +654,7 @@ paths:
           enum:
           - CAMERA_PREVIEW
           - DETECTION
+          - VIDEO_CLIP
         required: true
       tags:
       - v1
@@ -892,6 +947,23 @@ components:
           type: string
       required:
       - claim_token
+    ClearNotificationsRequest:
+      type: object
+      properties:
+        public_notification_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+      required:
+      - public_notification_ids
+    ClearNotificationsResponse:
+      type: object
+      properties:
+        cleared_count:
+          type: integer
+      required:
+      - cleared_count
     DetailResponse:
       type: object
       description: 'Shape of the ad hoc {''detail'': ''...''} error responses used
@@ -938,27 +1010,55 @@ components:
     Notification:
       type: object
       properties:
-        id:
-          type: integer
-          readOnly: true
         public_notification_id:
           type: string
           format: uuid
+          readOnly: true
+        public_camera_id:
+          type: string
+          format: uuid
+          readOnly: true
+        rule_nicknames:
+          type: array
+          items:
+            type: string
+            maxLength: 240
+        video_clip_key:
+          type: string
+          nullable: true
+        detection_preview_url:
+          type: string
+          readOnly: true
+        video_clip_url:
+          type: string
           readOnly: true
         created_at:
           type: string
           format: date-time
           readOnly: true
-        camera:
-          type: integer
-        rule:
-          type: integer
-          nullable: true
       required:
-      - camera
       - created_at
-      - id
+      - detection_preview_url
+      - public_camera_id
       - public_notification_id
+      - video_clip_url
+    PaginatedNotificationList:
+      type: object
+      required:
+      - results
+      properties:
+        next:
+          type: string
+          nullable: true
+          example: cD00ODY=
+        previous:
+          type: string
+          nullable: true
+          example: cD00ODY=
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
     PatchedCamera:
       type: object
       properties:
