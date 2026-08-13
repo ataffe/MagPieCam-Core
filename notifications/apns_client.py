@@ -69,6 +69,7 @@ def _post_notification(headers: dict, body: dict, url: str) -> httpx.Response:
 
 
 def send_notification(notification: Notification, preview_img_url: str) -> bool:
+    """Send one push for one notification, listing every rule it bundles."""
     try:
         access_token = refresh_jwt()
     except Exception as e:
@@ -87,17 +88,23 @@ def send_notification(notification: Notification, preview_img_url: str) -> bool:
         'apns-priority': str(settings.APNS_PRIORITY),
     }
 
-    rule = notification.rule
-    camera = notification.camera
+    camera_location = notification.camera.location
+    # One line per rule that fired on this detection image.
+    push_notification_body = "\n".join(
+        f"There is {rule.rule} in the {camera_location}.".capitalize()
+        for rule in notification.rules.order_by('id')
+    )
     body = {
         "aps": {
             "mutable-content": 1,
             "alert": {
                 "title": f"ScoutCam Rule Triggered!",
-                "body": f"{rule.rule} has been seen in the {camera.location}".capitalize()
+                "body": push_notification_body,
             }
         },
         "detection-image-url": preview_img_url,
+        "camera-id": str(notification.camera.public_camera_id),
+        "notification-id": str(notification.public_notification_id),
     }
     url = f"{settings.APNS_URL}/3/device/{device_id}"
 

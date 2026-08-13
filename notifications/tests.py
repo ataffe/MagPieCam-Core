@@ -2,13 +2,14 @@ import uuid
 from unittest.mock import patch, MagicMock, mock_open
 
 from django.conf import settings
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from notifications import apns_client
 from notifications.models import Notification
+from notifications.s3_client import get_s3_client
 from rules.models import Rule
 from users.models import User
 from camera.models import Camera
@@ -24,8 +25,24 @@ def make_user(username, email, password='StrongPass123!', first_name='Test', las
     )
 
 
+def make_notification(camera, *rules, visible=True, **kwargs):
+    """Build a notification the way events.processing does: one row bundling
+    every rule that fired on the same detection image."""
+    notification = Notification.objects.create(
+        camera=camera,
+        rule_nicknames=[rule.rule_nickname for rule in rules],
+        visible=visible,
+        **kwargs,
+    )
+    notification.rules.set(rules)
+    return notification
+
+
 class NotificationTests(TestCase):
     def setUp(self):
+        # get_s3_client() is process-cached via lru_cache, so a client (real or
+        # mocked) created by an earlier test would otherwise leak into this one.
+        get_s3_client.cache_clear()
         self.client = APIClient()
         self.user = make_user('alice', 'alice@example.com', first_name='Alice', last_name='Smith')
         self.other_user = make_user('bob', 'bob@example.com', first_name='Bob', last_name='Jones')
@@ -37,8 +54,7 @@ class NotificationTests(TestCase):
             rule='Notify on motion',
             rule_nickname='Motion alert',
         )
-        self.notification = Notification.objects.create(
-            camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname)
+        self.notification = make_notification(self.camera, self.rule)
 
     def get_jwt_token(self, user):
         refresh = RefreshToken.for_user(user)
@@ -62,14 +78,19 @@ class NotificationTests(TestCase):
             'public_notification_id': public_notification_id,
         })
 
+    def _clear_url(self, camera=None):
+        camera = camera or self.camera
+        return reverse('notifications:camera-notifications-clear', kwargs={
+            'camera_public_camera_id': camera.public_camera_id,
+        })
+
     def test_list_notifications_returns_only_camera_notifications(self):
         other_camera = Camera.objects.create(owner=self.user, location='Garage')
         other_rule = Rule.objects.create(
             owner=self.user, camera=other_camera,
             rule='Other rule', rule_nickname='Other',
         )
-        Notification.objects.create(
-            camera=other_camera, rule=other_rule, rule_nickname=other_rule.rule_nickname)
+        make_notification(other_camera, other_rule)
 
         response = self.client.get(self._notifications_list_url())
         self.assertEqual(response.status_code, 200)
@@ -84,8 +105,7 @@ class NotificationTests(TestCase):
         self.assertEqual(response.json()['results'], [])
 
     def test_list_ordered_newest_first(self):
-        second = Notification.objects.create(
-            camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname)
+        second = make_notification(self.camera, self.rule)
         response = self.client.get(self._notifications_list_url())
         self.assertEqual(response.status_code, 200)
         results = response.json()['results']
@@ -94,8 +114,7 @@ class NotificationTests(TestCase):
 
     def test_list_next_cursor_is_a_bare_token_not_a_url(self):
         for _ in range(3):
-            Notification.objects.create(
-                camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname)
+            make_notification(self.camera, self.rule)
 
         # NotificationPagination has no page_size query param wired up, so
         # shrink the page by patching the pagination class directly instead.
@@ -117,8 +136,7 @@ class NotificationTests(TestCase):
     def test_list_next_cursor_round_trips_to_the_following_page(self):
         notifications = [self.notification]
         for _ in range(3):
-            notifications.append(Notification.objects.create(
-                camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname))
+            notifications.append(make_notification(self.camera, self.rule))
         # Newest first: notifications[3] is first page, notifications[0] is last.
 
         from notifications.views import NotificationPagination
@@ -143,7 +161,7 @@ class NotificationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data['public_notification_id'], str(self.notification.public_notification_id))
-        self.assertEqual(data['rule_nickname'], self.rule.rule_nickname)
+        self.assertEqual(data['rule_nicknames'], [self.rule.rule_nickname])
         self.assertEqual(data['public_camera_id'], str(self.camera.public_camera_id))
 
     def test_retrieve_notification_not_found(self):
@@ -161,8 +179,7 @@ class NotificationTests(TestCase):
             owner=self.other_user, camera=other_camera,
             rule='Other rule', rule_nickname='Other',
         )
-        other_notification = Notification.objects.create(
-            camera=other_camera, rule=other_rule, rule_nickname=other_rule.rule_nickname)
+        other_notification = make_notification(other_camera, other_rule)
         response = self.client.get(self._notification_detail_url(
             public_notification_id=other_notification.public_notification_id, camera=other_camera,
         ))
@@ -186,24 +203,277 @@ class NotificationTests(TestCase):
         response = self.client.get(self._notifications_list_url())
         self.assertEqual(response.status_code, 401)
 
-    def test_deleting_rule_sets_notification_rule_to_null(self):
+    def test_retrieve_returns_every_rule_nickname_bundled_in_the_notification(self):
+        """Several rules can fire on one detection image; the app shows them
+        all against the single image and clip they share."""
+        second_rule = Rule.objects.create(
+            owner=self.user, camera=self.camera,
+            rule='Notify on dogs', rule_nickname='Dog alert',
+        )
+        bundled = make_notification(self.camera, self.rule, second_rule)
+
+        response = self.client.get(self._notification_detail_url(
+            public_notification_id=bundled.public_notification_id))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()['rule_nicknames'], ['Motion alert', 'Dog alert'])
+
+    def test_deleting_rule_drops_it_from_the_notification(self):
         self.rule.delete()
         self.notification.refresh_from_db()
-        self.assertIsNone(self.notification.rule)
+        self.assertEqual(list(self.notification.rules.all()), [])
 
-    def test_retrieve_notification_keeps_rule_nickname_after_rule_deleted(self):
-        # rule_nickname is copied onto the notification at creation time
-        # specifically so it survives rule deletion -- SET_NULL only clears the
-        # FK, it doesn't touch this denormalized column.
-        expected_nickname = self.rule.rule_nickname
+    def test_retrieve_notification_keeps_rule_nicknames_after_rule_deleted(self):
+        # rule_nicknames is copied onto the notification at creation time
+        # specifically so it survives rule deletion -- that only drops the m2m
+        # row, it doesn't touch this denormalized column.
+        expected_nicknames = [self.rule.rule_nickname]
         self.rule.delete()
         response = self.client.get(self._notification_detail_url())
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['rule_nickname'], expected_nickname)
+        self.assertEqual(response.json()['rule_nicknames'], expected_nicknames)
 
     def test_deleting_camera_cascades_to_notifications(self):
         self.camera.delete()
         self.assertFalse(Notification.objects.filter(pk=self.notification.pk).exists())
+
+    def test_detection_preview_url_is_null_when_no_detection_image_key(self):
+        response = self.client.get(self._notification_detail_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()['detection_preview_url'])
+
+    @patch('notifications.s3_client.boto3.client')
+    def test_detection_preview_url_is_a_presigned_url_when_key_is_set(self, mock_boto_client):
+        self.notification.detection_image_key = 'detection/cam-1/abc.jpg'
+        self.notification.save()
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        response = self.client.get(self._notification_detail_url())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['detection_preview_url'], 'https://example.com/presigned')
+        _, kwargs = mock_s3.generate_presigned_url.call_args
+        self.assertEqual(kwargs['Params']['Key'], 'detection/cam-1/abc.jpg')
+
+    @override_settings(AWS_IMG_DETECTION_BUCKET='detection-bucket')
+    @patch('notifications.s3_client.boto3.client')
+    def test_detection_preview_url_uses_detection_bucket(self, mock_boto_client):
+        self.notification.detection_image_key = 'detection/cam-1/abc.jpg'
+        self.notification.save()
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        self.client.get(self._notification_detail_url())
+
+        _, kwargs = mock_s3.generate_presigned_url.call_args
+        self.assertEqual(kwargs['Params']['Bucket'], 'detection-bucket')
+
+    def test_video_clip_url_is_null_until_the_clip_has_landed(self):
+        """video_clip_key is only set once S3 confirms the upload, so the app can
+        tell 'no clip yet' apart from a URL that would 404."""
+        response = self.client.get(self._notification_detail_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json()['video_clip_url'])
+
+    @patch('notifications.s3_client.boto3.client')
+    def test_video_clip_url_is_a_presigned_url_when_key_is_set(self, mock_boto_client):
+        self.notification.video_clip_key = 'clips/cam-1/abc.mp4'
+        self.notification.save()
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/clip'
+        mock_boto_client.return_value = mock_s3
+
+        response = self.client.get(self._notification_detail_url())
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['video_clip_url'], 'https://example.com/clip')
+        _, kwargs = mock_s3.generate_presigned_url.call_args
+        self.assertEqual(kwargs['Params']['Key'], 'clips/cam-1/abc.mp4')
+
+    @override_settings(AWS_IMG_DETECTION_BUCKET='detection-bucket',
+                       AWS_VIDEO_CLIP_BUCKET='clip-bucket')
+    @patch('notifications.s3_client.boto3.client')
+    def test_video_clip_url_uses_the_clip_bucket(self, mock_boto_client):
+        self.notification.video_clip_key = 'clips/cam-1/abc.mp4'
+        self.notification.save()
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/clip'
+        mock_boto_client.return_value = mock_s3
+
+        self.client.get(self._notification_detail_url())
+
+        _, kwargs = mock_s3.generate_presigned_url.call_args
+        self.assertEqual(kwargs['Params']['Bucket'], 'clip-bucket')
+
+    @override_settings(AWS_IMG_DETECTION_BUCKET='detection-bucket',
+                       AWS_VIDEO_CLIP_BUCKET='clip-bucket')
+    @patch('notifications.s3_client.boto3.client')
+    def test_detection_image_and_clip_are_presigned_against_their_own_buckets(self, mock_boto_client):
+        self.notification.detection_image_key = 'detection/cam-1/abc.jpg'
+        self.notification.video_clip_key = 'clips/cam-1/abc.mp4'
+        self.notification.save()
+        mock_s3 = MagicMock()
+        mock_s3.generate_presigned_url.return_value = 'https://example.com/presigned'
+        mock_boto_client.return_value = mock_s3
+
+        self.client.get(self._notification_detail_url())
+
+        buckets_by_key = {
+            call.kwargs['Params']['Key']: call.kwargs['Params']['Bucket']
+            for call in mock_s3.generate_presigned_url.call_args_list
+        }
+        self.assertEqual(buckets_by_key['detection/cam-1/abc.jpg'], 'detection-bucket')
+        self.assertEqual(buckets_by_key['clips/cam-1/abc.mp4'], 'clip-bucket')
+
+    def test_cleared_notification_is_excluded_from_list(self):
+        self.notification.visible = False
+        self.notification.save()
+        response = self.client.get(self._notifications_list_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['results'], [])
+
+    def test_cleared_notification_returns_404_on_retrieve(self):
+        self.notification.visible = False
+        self.notification.save()
+        response = self.client.get(self._notification_detail_url())
+        self.assertEqual(response.status_code, 404)
+
+
+class ClearNotificationsTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = make_user('alice', 'alice@example.com', first_name='Alice', last_name='Smith')
+        self.other_user = make_user('bob', 'bob@example.com', first_name='Bob', last_name='Jones')
+        self.authenticate(self.user)
+        self.camera = Camera.objects.create(owner=self.user, location='Front door')
+        self.rule = Rule.objects.create(
+            owner=self.user, camera=self.camera,
+            rule='Notify on motion', rule_nickname='Motion alert',
+        )
+        self.notification = make_notification(self.camera, self.rule)
+        self.other_notification = make_notification(self.camera, self.rule)
+
+    def get_jwt_token(self, user):
+        refresh = RefreshToken.for_user(user)
+        return str(refresh.access_token)
+
+    def authenticate(self, user):
+        token = self.get_jwt_token(user)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+    def _clear_url(self, camera=None):
+        camera = camera or self.camera
+        return reverse('notifications:camera-notifications-clear', kwargs={
+            'camera_public_camera_id': camera.public_camera_id,
+        })
+
+    def test_clear_single_notification_id_in_a_list(self):
+        response = self.client.post(
+            self._clear_url(),
+            data={'public_notification_ids': [str(self.notification.public_notification_id)]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['cleared_count'], 1)
+        self.notification.refresh_from_db()
+        self.assertFalse(self.notification.visible)
+
+    def test_clear_list_of_notification_ids(self):
+        response = self.client.post(
+            self._clear_url(),
+            data={'public_notification_ids': [
+                str(self.notification.public_notification_id),
+                str(self.other_notification.public_notification_id),
+            ]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['cleared_count'], 2)
+        self.notification.refresh_from_db()
+        self.other_notification.refresh_from_db()
+        self.assertFalse(self.notification.visible)
+        self.assertFalse(self.other_notification.visible)
+
+    def test_clearing_one_notification_does_not_affect_others(self):
+        self.client.post(
+            self._clear_url(),
+            data={'public_notification_ids': [str(self.notification.public_notification_id)]},
+            format='json',
+        )
+        self.other_notification.refresh_from_db()
+        self.assertTrue(self.other_notification.visible)
+
+    def test_clear_missing_ids_returns_400(self):
+        response = self.client.post(self._clear_url(), data={}, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_clear_empty_ids_list_returns_400(self):
+        response = self.client.post(
+            self._clear_url(), data={'public_notification_ids': []}, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_clear_unknown_id_is_a_no_op_not_an_error(self):
+        response = self.client.post(
+            self._clear_url(),
+            data={'public_notification_ids': [str(uuid.uuid4())]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['cleared_count'], 0)
+
+    def test_clear_already_cleared_notification_is_idempotent(self):
+        self.notification.visible = False
+        self.notification.save()
+
+        response = self.client.post(
+            self._clear_url(),
+            data={'public_notification_ids': [str(self.notification.public_notification_id)]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['cleared_count'], 1)
+
+    def test_cannot_clear_notification_on_another_users_camera(self):
+        other_camera = Camera.objects.create(owner=self.other_user, location='Garage')
+        other_rule = Rule.objects.create(
+            owner=self.other_user, camera=other_camera,
+            rule='Other rule', rule_nickname='Other',
+        )
+        foreign_notification = make_notification(other_camera, other_rule)
+
+        response = self.client.post(
+            self._clear_url(),
+            data={'public_notification_ids': [str(foreign_notification.public_notification_id)]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['cleared_count'], 0)
+        foreign_notification.refresh_from_db()
+        self.assertTrue(foreign_notification.visible)
+
+    def test_clear_on_another_users_camera_returns_404(self):
+        other_camera = Camera.objects.create(owner=self.other_user, location='Garage')
+        response = self.client.post(
+            self._clear_url(camera=other_camera),
+            data={'public_notification_ids': [str(self.notification.public_notification_id)]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_unauthenticated_clear_returns_401(self):
+        self.client.credentials()
+        response = self.client.post(
+            self._clear_url(),
+            data={'public_notification_ids': [str(self.notification.public_notification_id)]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 401)
 
 
 PREVIEW_IMG_URL = 'https://s3.example.com/bucket/detection.jpg?X-Amz-Signature=abc'
@@ -220,8 +490,7 @@ class ApnsClientTests(TestCase):
             owner=self.user, camera=self.camera,
             rule='Notify on motion', rule_nickname='Motion alert',
         )
-        self.notification = Notification.objects.create(
-            camera=self.camera, rule=self.rule, rule_nickname=self.rule.rule_nickname)
+        self.notification = make_notification(self.camera, self.rule)
         self.addCleanup(apns_client.cache_storage.clear)
 
     def _mock_client(self, mock_client_cls, status_code=200, json_data=None, content=b'{}', headers=None):
@@ -295,8 +564,52 @@ class ApnsClientTests(TestCase):
 
     @patch('notifications.apns_client.httpx.Client')
     @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_push_body_names_the_rule_that_fired(self, mock_refresh, mock_client_cls):
+        instance = self._mock_client(mock_client_cls, status_code=200)
+        apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
+        body = instance.post.call_args.kwargs['json']['aps']['alert']['body']
+        self.assertEqual(body, 'There is notify on motion in the backyard.')
+
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_push_body_lists_every_rule_bundled_in_the_notification(
+            self, mock_refresh, mock_client_cls):
+        # All the rules that fired on one detection image go out as a single
+        # push, one line each, rather than one push per rule.
+        dog_rule = Rule.objects.create(
+            owner=self.user, camera=self.camera,
+            rule='a dog is present', rule_nickname='Dog alert',
+        )
+        self.notification.rules.add(dog_rule)
+        instance = self._mock_client(mock_client_cls, status_code=200)
+
+        apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
+
+        body = instance.post.call_args.kwargs['json']['aps']['alert']['body']
+        self.assertEqual(body.split('\n'), [
+            'There is notify on motion in the backyard.',
+            'There is a dog is present in the backyard.',
+        ])
+
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
+    def test_only_one_push_is_sent_however_many_rules_fired(
+            self, mock_refresh, mock_client_cls):
+        dog_rule = Rule.objects.create(
+            owner=self.user, camera=self.camera,
+            rule='a dog is present', rule_nickname='Dog alert',
+        )
+        self.notification.rules.add(dog_rule)
+        instance = self._mock_client(mock_client_cls, status_code=200)
+
+        apns_client.send_notification(self.notification, PREVIEW_IMG_URL)
+
+        self.assertEqual(instance.post.call_count, 1)
+
+    @patch('notifications.apns_client.httpx.Client')
+    @patch('notifications.apns_client.refresh_jwt', return_value='fake-jwt')
     def test_send_notification_does_not_touch_rule_last_triggered(self, mock_refresh, mock_client_cls):
-        # Cooldown bookkeeping now lives in events.processing.create_notifications,
+        # Cooldown bookkeeping now lives in events.processing.create_notification,
         # not in the APNs transport client.
         self._mock_client(mock_client_cls, status_code=200)
         apns_client.send_notification(self.notification, PREVIEW_IMG_URL)

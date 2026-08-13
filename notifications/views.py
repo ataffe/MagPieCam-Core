@@ -2,14 +2,20 @@ import uuid
 from urllib.parse import urlparse, parse_qs
 
 from rest_framework import viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ParseError
 from rest_framework.pagination import CursorPagination
+from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema_view, extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 
 from notifications.models import Notification
-from notifications.serializers import NotificationSerializer
+from notifications.serializers import (
+    NotificationSerializer,
+    ClearNotificationsRequestSerializer,
+    ClearNotificationsResponseSerializer,
+)
 from camera.models import Camera
 
 class NotificationPagination(CursorPagination):
@@ -20,13 +26,6 @@ class NotificationPagination(CursorPagination):
 
     def encode_cursor(self, cursor):
         """Return the bare cursor token instead of a full next/previous URL.
-
-        Delegates to DRF for the actual offset/reverse/position -> base64
-        encoding and only strips the URL wrapper off the result, so this stays
-        correct if DRF's internal cursor format ever changes. The client
-        resends the token as-is via `?cursor=<token>`; a bare token also
-        avoids baking this server's scheme/host into the response, which
-        matters behind a reverse proxy that changes either.
         """
         url = super().encode_cursor(cursor)
         query = parse_qs(urlparse(url).query)
@@ -76,7 +75,10 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
             public_camera_id=self.kwargs["camera_public_camera_id"],
             owner=self.request.user,
         )
-        qs = Notification.objects.filter(camera=camera).select_related('rule')
+        qs = Notification.objects.filter(camera=camera)
+
+        if self.action in ("list", "retrieve"):
+            qs = qs.filter(visible=True)
 
         if self.action == "list":
             since = self.request.query_params.get("since")
@@ -86,3 +88,22 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
                 qs = qs.filter(public_notification_id__gt=since)
 
         return qs.order_by("-public_notification_id")
+
+    @extend_schema(
+        summary="Clear notifications",
+        description="Hide one or more of the authenticated user's notifications for this "
+                    "camera from the app. Clearing an unknown or already-cleared id is a "
+                    "no-op rather than an error.",
+        request=ClearNotificationsRequestSerializer,
+        responses={200: ClearNotificationsResponseSerializer},
+    )
+    @action(detail=False, methods=["post"])
+    def clear(self, request, *args, **kwargs):
+        serializer = ClearNotificationsRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        cleared_count = self.get_queryset().filter(
+            public_notification_id__in=serializer.validated_data["public_notification_ids"]
+        ).update(visible=False)
+
+        return Response(ClearNotificationsResponseSerializer({"cleared_count": cleared_count}).data)

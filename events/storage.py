@@ -3,6 +3,7 @@ import logging
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Tuple
+from functools import lru_cache
 
 import boto3
 from PIL import Image
@@ -12,7 +13,6 @@ from django.conf import settings
 from events.interfaces import ImageStorageClient, ParsedMessage
 
 logger = logging.getLogger('S3 Client')
-
 
 def s3_config_from_settings() -> dict:
     return {
@@ -27,9 +27,6 @@ def s3_config_from_settings() -> dict:
 class S3ImageStorageClient(ImageStorageClient):
     def __init__(self, config_dict=None, num_workers=10):
         config_dict = config_dict or s3_config_from_settings()
-        # A single client handles both object downloads and presigned URLs --
-        # the resource API has no presigned-URL support, so there's no reason
-        # to keep two separate boto3 handles open.
         self.s3_client = boto3.client(
             's3',
             endpoint_url=config_dict['endpoint_url'],
@@ -89,4 +86,12 @@ class S3ImageStorageClient(ImageStorageClient):
         if settings.ENVIRONMENT == 'dev':
             url = url.replace('scout-moto', settings.DEV_IP)
         return url
+
+    def delete_object(self, bucket: str, key: str):
+        self.s3_client.delete_object(Bucket=bucket, Key=key)
+
+
+@lru_cache(maxsize=1)
+def get_s3_image_storage_client() -> S3ImageStorageClient:
+    return S3ImageStorageClient()
 

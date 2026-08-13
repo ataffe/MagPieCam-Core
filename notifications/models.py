@@ -1,3 +1,4 @@
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
 from camera.models import Camera
@@ -20,13 +21,20 @@ class Notification(models.Model):
         on_delete=models.CASCADE,
         related_name='notifications',
     )
-    rule = models.ForeignKey(
+    # One detection image is evaluated against every rule on the camera, and
+    # every rule that fires shares that image and its clip -- so they're
+    # bundled into a single notification rather than one notification each.
+    rules = models.ManyToManyField(
         Rule,
-        on_delete=models.SET_NULL,
-        null=True,
         blank=True,
-        related_name='notifications'
+        related_name='notifications',
     )
-    rule_nickname = models.CharField(null=False, blank=False)
+    # Denormalized copy of the nicknames: deleting a rule drops its row from
+    # the m2m table, this keeps the notification readable afterwards.
+    rule_nicknames = ArrayField(models.CharField(max_length=240), default=list)
+    detection_image_key = models.CharField(null=True, blank=True)
+    # Stays null until the clip actually lands in S3
+    video_clip_key = models.CharField(null=True, blank=True)
+    visible = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 

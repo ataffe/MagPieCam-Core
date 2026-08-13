@@ -35,6 +35,8 @@ def get_upload_url(img_key: str, content_type: str, upload_type: str):
     s3_bucket_name = settings.AWS_IMG_DETECTION_BUCKET
     if upload_type == UploadType.CAMERA_PREVIEW:
         s3_bucket_name = settings.AWS_IMG_PREVIEW_BUCKET
+    elif upload_type == UploadType.VIDEO_CLIP:
+        s3_bucket_name = settings.AWS_VIDEO_CLIP_BUCKET
     url = get_s3_client().generate_presigned_url(
             ClientMethod='put_object',
             Params={'Bucket': s3_bucket_name, 'Key': img_key, 'ContentType': content_type},
