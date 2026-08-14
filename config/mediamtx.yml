@@ -63,7 +63,7 @@ authMethod: http
 # and a payload described in the documentation.
 # If the response code is 20x, authentication is accepted, otherwise
 # it is discarded.
-authHTTPAddress: http://scoutcam-web-service:8000/v1/cameras/mediamtx/auth/
+authHTTPAddress: http://magpiecam-core:8000/v1/cameras/mediamtx/auth/
 # If the HTTP authentication URL has a self-signed or invalid certificate,
 # you can provide the fingerprint of the certificate in order to
 # validate it anyway. It can be obtained by running:

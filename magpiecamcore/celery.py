@@ -6,11 +6,11 @@ from celery import Celery
 from celery.signals import worker_process_init
 from django.conf import settings
 
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'scoutcamservice.settings')
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'magpiecamcore.settings')
 
 logger = logging.getLogger('Celery')
 
-app = Celery('scoutcamservice')
+app = Celery('magpiecamcore')
 
 # Every CELERY_-prefixed Django setting becomes Celery config, so the broker URL
 # and friends stay in settings.py with everything else.

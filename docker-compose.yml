@@ -1,8 +1,8 @@
-name: ScoutCam-Backend
+name: MagPieCam-Core
 services:
-  scoutcam-postgres:
+  magpiecam-postgres:
     image: postgres
-    container_name: scoutcam-postgres
+    container_name: magpiecam-postgres
     env_file:
       - .env
     environment:
@@ -12,18 +12,18 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - scoutcam-postgres-data:/var/lib/postgresql
+      - magpiecam-postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USERNAME} -d ${DATABASE_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
-      - scoutcam-network
+      - magpiecam-network
 
-  scoutcam-redis:
+  magpiecam-redis:
     image: redis
-    container_name: scoutcam-redis
+    container_name: magpiecam-redis
     env_file:
       - .env
     healthcheck:
@@ -34,27 +34,26 @@ services:
     ports:
       - "6379:6379"
     networks:
-      - scoutcam-network
+      - magpiecam-network
 
-  scoutcam-web-service:
+  magpiecam-core:
     build: .
-    image: scoutcam-webservice:0.1.0
-    container_name: scoutcam-web-service
+    image: magpiecam-core:0.1.0
+    container_name: magpiecam-core
     env_file:
       - .env
     tty: true
     stdin_open: true
     depends_on:
-      scoutcam-postgres:
+      magpiecam-postgres:
         condition: service_healthy
       scout-moto:
         condition: service_healthy
     ports:
       - "8000:8000"
     networks:
-      - scoutcam-network
+      - magpiecam-network
 
-  # Image evaluation worker (events.tasks) only.
   # Use only 1 worker because each worker has a copy of the rules model
   # If more workers are needed scale the docker container.
   rules-ml-worker:
@@ -65,9 +64,9 @@ services:
         # Triton JIT-compiles CUDA kernels at runtime, so the ML image needs a
         # C compiler on board.
         INSTALL_ML_BUILD_TOOLS: "1"
-    image: scoutcam-webservice-worker-ml:0.1.0
+    image: magpiecam-core-worker-ml:0.1.0
     container_name: rules-ml-worker
-    command: celery -A scoutcamservice worker -Q events --concurrency=1 -l ${CELERY_ML_WORKER_LOG_LEVEL:-INFO}
+    command: celery -A magpiecamcore worker -Q events --concurrency=1 -l ${CELERY_ML_WORKER_LOG_LEVEL:-INFO}
     environment:
       PRELOAD_RULES_MODEL: "1"
     env_file:
@@ -78,58 +77,58 @@ services:
     # Persist the multi-GB weights across restarts so init() skips the Backblaze
     # download when the dir is already populated.
     volumes:
-      - scoutcam-ml-weights:/app/ml_weights
+      - magpiecam-ml-weights:/app/ml_weights
     tty: true
     stdin_open: true
     depends_on:
-      scoutcam-postgres:
+      magpiecam-postgres:
         condition: service_healthy
-      scoutcam-redis:
+      magpiecam-redis:
         condition: service_healthy
       scout-moto:
         condition: service_healthy
     networks:
-      - scoutcam-network
+      - magpiecam-network
 
   # Stream sweeping worker (camera.tasks)
   stream-command-worker:
     build:
       context: .
-    image: scoutcam-webservice:0.1.0
+    image: magpiecam-core:0.1.0
     container_name: stream-command-worker
-    command: celery -A scoutcamservice worker -Q camera --concurrency=2 -l ${CELERY_STREAMING_COMMAND_WORKER_LOG_LEVEL:-INFO}
+    command: celery -A magpiecamcore worker -Q camera --concurrency=2 -l ${CELERY_STREAMING_COMMAND_WORKER_LOG_LEVEL:-INFO}
     env_file:
       - .env
     tty: true
     stdin_open: true
     depends_on:
-      scoutcam-redis:
+      magpiecam-redis:
         condition: service_healthy
     networks:
-      - scoutcam-network
+      - magpiecam-network
 
   # Beat only schedules; it shares the worker image so there's one build to keep
   # in sync rather than three.
   stream-cleanup-scheduler:
     build:
       context: .
-    image: scoutcam-webservice:0.1.0
+    image: magpiecam-core:0.1.0
     container_name: stream-cleanup-scheduler
-    command: celery -A scoutcamservice beat -l ${CELERY_BEAT_LOG_LEVEL:-INFO}
+    command: celery -A magpiecamcore beat -l ${CELERY_BEAT_LOG_LEVEL:-INFO}
     env_file:
       - .env
     tty: true
     stdin_open: true
     depends_on:
-      scoutcam-redis:
+      magpiecam-redis:
         condition: service_healthy
     networks:
-      - scoutcam-network
+      - magpiecam-network
 
   detection-event-consumer:
     build:
       context: .
-    image: scoutcam-webservice:0.1.0
+    image: magpiecam-core:0.1.0
     container_name: detection-event-consumer
     command: python manage.py consume_events
     # The app-level retry in SQSImageQueueClient covers the queue not existing
@@ -140,21 +139,21 @@ services:
     env_file:
       - .env
     depends_on:
-      scoutcam-postgres:
+      magpiecam-postgres:
         condition: service_healthy
-      scoutcam-redis:
+      magpiecam-redis:
         condition: service_healthy
       scout-moto:
         condition: service_healthy
     networks:
-      - scoutcam-network
+      - magpiecam-network
 
   # Mocks S3 and SQS for local dev so nothing touches real AWS. Seeds the
   # buckets/queue from .env-docker on every start since moto keeps no state.
   scout-moto:
     build:
       context: ./docker/moto
-    image: scoutcam-moto:0.1.0
+    image: magpiecam-moto:0.1.0
     container_name: scout-moto
     env_file:
       - .env
@@ -169,7 +168,7 @@ services:
       timeout: 5s
       retries: 10
     networks:
-      - scoutcam-network
+      - magpiecam-network
 
   scout-media-mtx:
     image: bluenviron/mediamtx:1
@@ -186,12 +185,12 @@ services:
       - "9997:9997"
       - "8189:8189/udp"
     networks:
-      - scoutcam-network
+      - magpiecam-network
 
 networks:
-  scoutcam-network:
-    name: scoutcam-network
+  magpiecam-network:
+    name: magpiecam-network
 
 volumes:
-  scoutcam-postgres-data:
-  scoutcam-ml-weights:
+  magpiecam-postgres-data:
+  magpiecam-ml-weights:

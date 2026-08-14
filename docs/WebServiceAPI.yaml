@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: ScoutCam API
+  title: MagPieCam API
   version: 1.0.0
   description: A backend system for a smart camera.
 paths:
