@@ -98,7 +98,7 @@ def send_notification(notification: Notification, preview_img_url: str) -> bool:
         "aps": {
             "mutable-content": 1,
             "alert": {
-                "title": f"ScoutCam Rule Triggered!",
+                "title": f"MagPieCam Rule Triggered!",
                 "body": push_notification_body,
             }
         },
