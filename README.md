@@ -10,10 +10,11 @@ UUIDv7 function.
 
 ### Brief Overview
 
-[MagPieCam Edge Agent](https://github.com/ataffe/MagPieCamEdgeAgent) - Detects Motion and filters images using object detection and then sends the image to the 
-event processor if an object is detected.
+[MagPieCam Edge Agent](https://github.com/ataffe/MagPieCamEdgeAgent) - An agent that runs on the camera. It tracks movement and sends images and video to the 
+MagPieCam-Core backend for processing.
 
-[MagPieCam iOS App](https://github.com/ataffe/MagPieCam-iOS) - User app for managing cameras and notifying the user of events.
+[MagPieCam-iOS](https://github.com/ataffe/MagPieCam-iOS) - An iOS app that enables users to receive smart notifications
+based on rules that they set, and video live video from a MagPieCam.
 
 ---
 
