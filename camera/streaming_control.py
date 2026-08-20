@@ -23,6 +23,8 @@ async def publish_command(public_camera_id, command: str):
         elif command == "stop":
             logger.info(f"stopping stream for camera {public_camera_id}")
             await redis_client.delete(streaming_state_key(public_camera_id))
-
+        elif command == "bbox_on":
+            logger.info(f"Starting debug stream for camera {public_camera_id}")
+            await redis_client.setex(streaming_state_key(public_camera_id), settings.STREAMING_STATE_KEY_TTL, "bbox_on")
         await redis_client.publish(channel(public_camera_id), command)
 

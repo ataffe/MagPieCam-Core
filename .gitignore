@@ -209,6 +209,7 @@ __marimo__/
 .idea/*
 .env
 .env*
+.*-env
 .claude
 raspberry_pi_test_device_id.txt
 

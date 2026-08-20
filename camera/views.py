@@ -384,6 +384,29 @@ class StartStreamingView(APIView):
         logger.debug(f'Request start streaming for camera with public_camera_id: {camera.public_camera_id}')
         return Response(status=status.HTTP_200_OK)
 
+class StartDebugStreamingView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=None,
+        responses={
+            200: None,
+            401: None,
+            404: DetailResponseSerializer,
+        },
+    )
+    def post(self, request, public_camera_id):
+        """Publish a "start" command to the camera's streaming channel, signalling it to begin publishing to MediaMTX."""
+        try:
+            camera = Camera.objects.get(public_camera_id=public_camera_id)
+        except Camera.DoesNotExist:
+            return Response({'detail': 'Camera does not exist'}, status=status.HTTP_404_NOT_FOUND)
+        if camera.owner != request.user or camera.revoked:
+            return Response(status=status.HTTP_401_UNAUTHORIZED)
+        async_to_sync(publish_command)(camera.public_camera_id, "bbox_on")
+        logger.debug(f'Request start streaming for camera with public_camera_id: {camera.public_camera_id}')
+        return Response(status=status.HTTP_200_OK)
+
 
 async def streaming_command_view(request):
     """Long-poll for a streaming command (start/stop) published to the authenticated camera's Redis channel."""

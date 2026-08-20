@@ -11,6 +11,7 @@ from camera.views import (
     CameraTokenExchangeView,
     MediaMtxAuthView,
     StartStreamingView,
+    StartDebugStreamingView,
     streaming_command_view
 )
 
@@ -30,7 +31,8 @@ urlpatterns = [
     path('cameras/claim/', CameraClaimView.as_view(), name='claim_camera'),
     path('cameras/auth/token/', CameraTokenExchangeView.as_view(), name='token_exchange'),
     path('cameras/streaming/command/', streaming_command_view, name='streaming_command'),
+    path('cameras/<uuid:public_camera_id>/streaming/command/debug', StartDebugStreamingView.as_view(), name='streaming_debug_command'),
     path('cameras/<uuid:public_camera_id>/streaming/start/', StartStreamingView.as_view(), name='start_streaming'),
-path('cameras/mediamtx/auth/', MediaMtxAuthView.as_view(), name='mediamtx_auth'),
+    path('cameras/mediamtx/auth/', MediaMtxAuthView.as_view(), name='mediamtx_auth'),
     *camera_router.urls,
 ]
