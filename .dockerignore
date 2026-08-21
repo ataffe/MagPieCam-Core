@@ -34,6 +34,7 @@ ml_weights
 .env.bak
 .env-docker
 .env.example
+.*-env
 
 # Build/run scripts aren't needed inside the image
 Dockerfile
