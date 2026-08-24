@@ -46,10 +46,12 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     # Required by Notification.rule_nicknames (ArrayField).
     'django.contrib.postgres',
-    'drf_spectacular'
+    'drf_spectacular',
+    'django_prometheus'
 ]
 
 MIDDLEWARE = [
+    'django_prometheus.middleware.PrometheusBeforeMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -57,7 +59,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware'
+    'whitenoise.middleware.WhiteNoiseMiddleware',
+    'django_prometheus.middleware.PrometheusAfterMiddleware',
 ]
 
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
@@ -221,7 +224,7 @@ VPN_IP = os.environ.get('VPN_IP', default="")
 # db 1, while the streaming state keys live in db 0
 CELERY_BROKER_URL = os.environ.get(
     'CELERY_BROKER_URL', default=f'redis://{REDIS_HOST}:{REDIS_PORT}/1')
-
+CELERY_WORKER_METRICS_PORT = int(os.environ.get('CELERY_WORKER_METRICS_PORT', '8225'))
 CELERY_RESULT_BACKEND = None
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_ACCEPT_CONTENT = ['json']
@@ -245,3 +248,5 @@ APNS_PRIORITY = int(os.environ.get("APNS_PRIORITY", default=10))
 
 # Notifications
 RULE_TRIGGER_COOLDOWN_MINUTES = int(os.environ.get("RULE_TRIGGER_COOLDOWN_MINUTES", default=2))
+
+PROMETHEUS_EXPORT_MIGRATIONS = False

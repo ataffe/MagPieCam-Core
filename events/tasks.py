@@ -1,5 +1,6 @@
 import logging
 from celery import shared_task
+from prometheus_client import Counter, Gauge
 
 from django.conf import settings
 from camera.media_keys import CLIP_PREFIX, detection_key, parse_media_key
@@ -10,6 +11,23 @@ from notifications.apns_client import send_notification
 from notifications.models import Notification
 logger = logging.getLogger('Events')
 
+image_eval_ctr = Counter(
+    'magpiecam_images_evaluated',
+    'Total number of image the rules model has evaluated.')
+image_eval_failures = Counter(
+    'magpiecam_images_failed',
+    'Number of images that failed at some point during evaluation.')
+notifications_triggered = Counter(
+    'magpiecam_notifications_triggered',
+    'Number of notifications triggered during evaluation.')
+
+video_clips_added = Gauge(
+    'magpiecam_video_clips_added',
+    'Number of video clips add to the video clip s3 bucket.')
+
+push_notification_send_failed = Counter(
+    'magpiecam_push_notifications_failed',
+    'Number of failed push notifications.')
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def evaluate_camera_image(self, bucket: str, key: str, public_camera_id: str,
@@ -21,10 +39,11 @@ def evaluate_camera_image(self, bucket: str, key: str, public_camera_id: str,
         image = storage.download_image(bucket, key)
     except Exception as exc:
         logger.exception('Failed to download s3://%s/%s', bucket, key)
+        image_eval_failures.inc()
         raise self.retry(exc=exc)
 
     notification = process_camera_image(public_camera_id, image, detection_image_key=key)
-
+    image_eval_ctr.inc()
     if notification is None:
         # Nothing fired, so there is nothing left to do with this image.
         if receipt_handle:
@@ -35,16 +54,19 @@ def evaluate_camera_image(self, bucket: str, key: str, public_camera_id: str,
         detection_preview_url = storage.get_image_download_url(bucket, key)
     except Exception as exc:
         logger.exception('Failed to generate download url for s3://%s/%s', bucket, key)
+        image_eval_failures.inc()
         raise self.retry(exc=exc)
 
     if settings.VPN_IP:
         detection_preview_url = detection_preview_url.replace(settings.DEV_IP, settings.VPN_IP)
 
     if not send_notification(notification, detection_preview_url):
-        # Leave the message on the queue so the push is retried from scratch.
+        # Leave the message on the queue so the push is retried.
         notification.delete()
+        push_notification_send_failed.inc()
         return 0
 
+    notifications_triggered.inc()
     notification.visible = True
     notification.save(update_fields=['visible'])
 
@@ -80,6 +102,7 @@ def attach_video_clip(self, bucket: str, key: str, public_camera_id: str,
             )
         else:
             logger.info('Attached clip %s to %d notification(s)', key, attached)
+            video_clips_added.inc()
 
     if receipt_handle:
         SQSImageQueueClient().delete_message(receipt_handle)

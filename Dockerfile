@@ -16,11 +16,10 @@ ENV PYTHONUNBUFFERED=1
 # Upgrade pip
 RUN pip install --upgrade pip
 
-# Which dependency set to install. Defaults to api.txt (base + the event-
-# processing runtime) so the one shared image works for the web service, beat,
-# the lite worker, and the consumer -- Celery autodiscovery imports events.tasks,
-# which pulls in Pillow at module load. The ML worker overrides this with
-# hosted.txt to add torch/transformers.
+# Which dependency set to install.
+# Base = base requirements for all containers
+# API = requirements for the api version of the rules model
+# hosted = requirements for the hosted version of the rules model
 ARG REQUIREMENTS=requirements/api.txt
 
 COPY requirements/ /app/requirements/
@@ -32,8 +31,8 @@ RUN pip install --no-cache-dir -r ${REQUIREMENTS}
 FROM python:3.14-slim
 
 # The hosted ML worker JIT-compiles Triton kernels at runtime (torch's _native
-# eager ops), which needs a C compiler present in the *running* container.
-# Enabled only for the ML image via build arg so the shared/lite image stays slim.
+# eager ops), which needs a C compiler present in the running container.
+# Enabled only for the ML image via build arg.
 ARG INSTALL_ML_BUILD_TOOLS=0
 RUN if [ "$INSTALL_ML_BUILD_TOOLS" = "1" ]; then \
         apt-get update && \
@@ -55,19 +54,23 @@ WORKDIR /app
 # Copy the application code
 COPY --chown=appuser:appuser . .
 
-# ml_weights is .dockerignored, so create it here owned by appuser. A named
-# volume mounted at this path on the ML worker inherits that ownership (Docker
-# seeds an empty volume from the image mount point), so the model can write the
-# downloaded weights as appuser instead of hitting a root-owned mount.
+# ml_weights download directory
 RUN mkdir -p /app/ml_weights && chown appuser:appuser /app/ml_weights
 
-# Set environment variables to optimize Python
+# Directory for prometheus metrics aggreagation across multiple processes.
+RUN mkdir -p /tmp/prometheus_multiproc && chown appuser:appuser /tmp/prometheus_multiproc
+
+# Environment variables to optimize Python
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus_multiproc
 
 RUN chmod +x runserver.sh
 
 USER appuser
 
+# Django port
 EXPOSE 8000
+# Rules eval worker prometheus metrics port
+EXPOSE 8225
 CMD ["./runserver.sh"]
