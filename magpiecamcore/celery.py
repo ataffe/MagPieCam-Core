@@ -73,7 +73,8 @@ def start_metrics_server(**_kwargs):
     for name in os.listdir(multiproc_dir):
         os.remove(os.path.join(multiproc_dir, name))
 
-    httpd = HTTPServer(('0.0.0.0', settings.CELERY_WORKER_METRICS_PORT), _MultiProcessMetricsHandler)
+    # Added bandit suppression because this runs in a docker container
+    httpd = HTTPServer(('0.0.0.0', settings.CELERY_WORKER_METRICS_PORT), _MultiProcessMetricsHandler) # nosec B104
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
 
