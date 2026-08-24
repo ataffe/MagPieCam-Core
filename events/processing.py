@@ -3,6 +3,7 @@
 import logging
 from datetime import timedelta
 from functools import lru_cache
+import time
 
 from django.conf import settings
 from django.db import transaction
@@ -15,9 +16,13 @@ from events.ml.model_factory import build_rules_model
 from events.selectors import get_rule_dtos_by_camera_ids
 from notifications.models import Notification
 from rules.models import Rule
+from prometheus_client import Histogram
 
 logger = logging.getLogger('Events')
 
+model_eval_time_histogram = Histogram(
+    'magpiecam_rules_model_eval_time_histogram',
+'Histogram of model eval time per detection image.',)
 
 @lru_cache(maxsize=1)
 def get_rules_model():
@@ -82,8 +87,10 @@ def process_camera_image(public_camera_id: str, image,
                      public_camera_id)
         return None
 
+    eval_start = time.perf_counter()
     triggered_rule_ids = get_rules_model().evaluate_rules(
         UserRulesEvalRequest(image, rules))
+    model_eval_time_histogram.observe(round(time.perf_counter() - eval_start, 2))
 
     if not triggered_rule_ids:
         logger.info('No rules triggered for camera %s', public_camera_id)

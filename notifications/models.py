@@ -1,11 +1,12 @@
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
+from django_prometheus.models import ExportModelOperationsMixin
 
 from camera.models import Camera
 from rules.models import Rule
 
 
-class Notification(models.Model):
+class Notification(ExportModelOperationsMixin('Notification'), models.Model):
     class Meta:
         indexes = [
             models.Index(fields=["camera", "-public_notification_id"]),

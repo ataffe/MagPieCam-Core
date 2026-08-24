@@ -131,10 +131,6 @@ services:
     image: magpiecam-core:0.1.0
     container_name: detection-event-consumer
     command: python manage.py consume_events
-    # The app-level retry in SQSImageQueueClient covers the queue not existing
-    # yet; this is the backstop for everything else -- if it still crashes
-    # (retries exhausted, transient network loss, etc.) Docker brings it back
-    # instead of it staying dead until someone notices.
     restart: unless-stopped
     env_file:
       - .env
@@ -160,9 +156,6 @@ services:
     ports:
       - "5001:5001" # These need to match for presigned urls in dev env.
     healthcheck:
-      # moto now serves TLS-only (run_server.py passes -c/-k); the cert is
-      # self-signed for local dev, so this liveness probe skips verification
-      # rather than trusting it.
       test: ["CMD", "python", "-c", "import ssl, urllib.request; urllib.request.urlopen('https://localhost:5001/moto-api/', context=ssl._create_unverified_context())"]
       interval: 5s
       timeout: 5s
@@ -170,9 +163,9 @@ services:
     networks:
       - magpiecam-network
 
-  scout-media-mtx:
+  media-mtx:
     image: bluenviron/mediamtx:1
-    container_name: scout-media-mtx
+    container_name: media-mtx
     environment:
       MTX_RTSPTRANSPORTS: tcp
       MTX_WEBRTCADDITIONALHOSTS: ${DEV_IP}
@@ -184,6 +177,16 @@ services:
       - "8889:8889"
       - "9997:9997"
       - "8189:8189/udp"
+    networks:
+      - magpiecam-network
+
+  prometheus-server:
+    image: prom/prometheus
+    container_name: prometheus-server
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
     networks:
       - magpiecam-network
 

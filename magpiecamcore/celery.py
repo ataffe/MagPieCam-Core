@@ -1,10 +1,13 @@
 import logging
 import os
+import threading
 from datetime import timedelta
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from celery import Celery
-from celery.signals import worker_process_init
+from celery.signals import worker_init, worker_process_init, worker_process_shutdown
 from django.conf import settings
+from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, generate_latest, multiprocess
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'magpiecamcore.settings')
 
@@ -12,8 +15,6 @@ logger = logging.getLogger('Celery')
 
 app = Celery('magpiecamcore')
 
-# Every CELERY_-prefixed Django setting becomes Celery config, so the broker URL
-# and friends stay in settings.py with everything else.
 app.config_from_object('django.conf:settings', namespace='CELERY')
 
 app.autodiscover_tasks()
@@ -30,11 +31,10 @@ app.conf.beat_schedule = {
 def preload_rules_model(**_kwargs):
     """Load and warm the rules model once, when a worker process boots.
 
-    Fires in each prefork child right after fork, so the first real image task
-    isn't the one that pays the multi-GB weight load and warm-up. Gated on an
-    env var and set only on the ML worker (which runs at concurrency=1, so this
-    loads exactly one copy) -- the lite/beat processes never touch the model
-    stack. The import is deferred so those processes don't pull it in either.
+    Fires in each prefork child right after fork, and downloads the models weights,
+    (which takes a few minutes) if the hosted version of the model is used. If the
+    API version is used it just creates an instance of the rules model which takes
+    seconds.
     """
     if not os.environ.get('PRELOAD_RULES_MODEL'):
         return
@@ -42,3 +42,42 @@ def preload_rules_model(**_kwargs):
     logger.info('Preloading rules model on worker process init...')
     get_rules_model()
     logger.info('Rules model preloaded.')
+
+class _MultiProcessMetricsHandler(BaseHTTPRequestHandler):
+    """Aggregates the counters from every forked child.
+    """
+
+    def do_GET(self):
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        output = generate_latest(registry)
+        self.send_response(200)
+        self.send_header('Content-Type', CONTENT_TYPE_LATEST)
+        self.end_headers()
+        self.wfile.write(output)
+
+    def log_message(self, *_args):
+        pass
+
+
+@worker_init.connect
+def start_metrics_server(**_kwargs):
+    """Fires once in the master process, before any pool child is forked.
+    """
+    multiproc_dir = os.environ.get('PROMETHEUS_MULTIPROC_DIR')
+    if not multiproc_dir:
+        logger.warning('PROMETHEUS_MULTIPROC_DIR not set; skipping metrics export.')
+        return
+
+    os.makedirs(multiproc_dir, exist_ok=True)
+    for name in os.listdir(multiproc_dir):
+        os.remove(os.path.join(multiproc_dir, name))
+
+    httpd = HTTPServer(('0.0.0.0', settings.CELERY_WORKER_METRICS_PORT), _MultiProcessMetricsHandler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+
+@worker_process_shutdown.connect
+def mark_worker_process_dead(pid, **_kwargs):
+    if os.environ.get('PROMETHEUS_MULTIPROC_DIR'):
+        multiprocess.mark_process_dead(pid)
